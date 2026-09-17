@@ -107,22 +107,26 @@
   z-index: 20;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
+  max-height: calc(100vh - 120px);
+  overflow-y: auto;
   background: rgba(255, 255, 255, 0.9);
   backdrop-filter: blur(10px);
   border-radius: 16px;
   padding: 8px;
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.12);
   border: 1px solid rgba(0, 0, 0, 0.06);
+  scrollbar-width: thin;
 }
 
 .board-toolbar__btn {
-  width: 40px;
-  height: 40px;
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
   border-radius: 10px;
   border: none;
   background: transparent;
-  font-size: 17px;
+  font-size: 15px;
   cursor: pointer;
   transition: background 0.15s, transform 0.1s;
   color: #333;
@@ -208,4 +212,56 @@
 .board-format-btn.is-active {
   background: #ff7a59;
   color: #14100f;
+}
+
+.board-props-panel {
+  position: fixed;
+  right: 20px;
+  top: 80px;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 220px;
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(10px);
+  border-radius: 14px;
+  padding: 14px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.12);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.board-props-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #333;
+}
+
+.board-props-row span:first-child {
+  flex: 0 0 76px;
+}
+
+.board-props-row input[type='color'] {
+  width: 32px;
+  height: 26px;
+  border: none;
+  border-radius: 6px;
+  padding: 0;
+  cursor: pointer;
+  background: none;
+}
+
+.board-props-row input[type='range'] {
+  flex: 1;
+  accent-color: #ff7a59;
+}
+
+.board-props-value {
+  flex: 0 0 24px;
+  text-align: right;
+  color: #666;
+  font-weight: 500;
 }

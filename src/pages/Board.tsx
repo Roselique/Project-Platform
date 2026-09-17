@@ -1,16 +1,29 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Stage, Layer, Rect, Ellipse, Text, Arrow, Line, Transformer, Image as KonvaImage } from 'react-konva';
+import {
+  Stage,
+  Layer,
+  Rect,
+  Ellipse,
+  RegularPolygon,
+  Star,
+  Text,
+  Arrow,
+  Line,
+  Transformer,
+  Image as KonvaImage,
+} from 'react-konva';
 import type Konva from 'konva';
 import { useBoardsStore } from '../store/boardsStore';
-import type { BoardElement, ElementType, ImageElement } from '../types/board';
+import type { BoardElement, ElementType, ImageElement, ShapeElement } from '../types/board';
 import { makeId } from '../utils/id';
 import './Board.css';
 
 const STICKY_COLORS = ['#FFE066', '#FF9F6B', '#8CE99A', '#74C0FC', '#FFA8CC', '#B197FC'];
 const GRID_SIZE = 32;
+const SHAPE_TYPES = new Set(['rect', 'ellipse', 'triangle', 'diamond', 'star']);
 
-type Tool = 'select' | 'sticky' | 'text' | 'rect' | 'ellipse' | 'arrow' | 'pen';
+type Tool = 'select' | 'sticky' | 'text' | 'rect' | 'ellipse' | 'triangle' | 'diamond' | 'star' | 'arrow' | 'pen';
 
 function useImageEl(src: string): HTMLImageElement | undefined {
   const [img, setImg] = useState<HTMLImageElement>();
@@ -210,10 +223,28 @@ export default function Board() {
         el = { ...common, type: 'text', width: 240, height: 40, fill: 'transparent', text: 'Text', fontSize: 28, color: '#1a1a1a' };
         break;
       case 'rect':
-        el = { ...common, type: 'rect', width: 180, height: 120, fill: '#74C0FC', strokeWidth: 0 } as any;
+        el = {
+          ...common,
+          type: 'rect',
+          width: 180,
+          height: 120,
+          fill: '#74C0FC',
+          stroke: '#1a1a1a',
+          strokeWidth: 0,
+          cornerRadius: 10,
+        } as any;
         break;
       case 'ellipse':
-        el = { ...common, type: 'ellipse', width: 160, height: 160, fill: '#B197FC', strokeWidth: 0 } as any;
+        el = { ...common, type: 'ellipse', width: 160, height: 160, fill: '#B197FC', stroke: '#1a1a1a', strokeWidth: 0 } as any;
+        break;
+      case 'triangle':
+        el = { ...common, type: 'triangle', width: 160, height: 150, fill: '#FFA8CC', stroke: '#1a1a1a', strokeWidth: 0 } as any;
+        break;
+      case 'diamond':
+        el = { ...common, type: 'diamond', width: 160, height: 160, fill: '#8CE99A', stroke: '#1a1a1a', strokeWidth: 0 } as any;
+        break;
+      case 'star':
+        el = { ...common, type: 'star', width: 160, height: 160, fill: '#FFE066', stroke: '#1a1a1a', strokeWidth: 0 } as any;
         break;
       default:
         return;
@@ -443,6 +474,9 @@ export default function Board() {
           ['text', 'T', 'Text (T)'],
           ['rect', '▭', 'Rectangle (R)'],
           ['ellipse', '◯', 'Ellipse (O)'],
+          ['triangle', '▲', 'Triangle'],
+          ['diamond', '◆', 'Diamond'],
+          ['star', '★', 'Star'],
           ['arrow', '↗', 'Arrow (A)'],
         ] as [Tool, string, string][]).map(([t, icon, label]) => (
           <button
@@ -572,7 +606,9 @@ export default function Board() {
                   width={el.width}
                   height={el.height}
                   fill={el.fill}
-                  cornerRadius={10}
+                  stroke={el.stroke}
+                  strokeWidth={el.strokeWidth}
+                  cornerRadius={el.cornerRadius ?? 0}
                   rotation={el.rotation}
                   draggable
                   onDragEnd={(e) => updateElement({ ...el, x: e.target.x(), y: e.target.y() })}
@@ -603,6 +639,8 @@ export default function Board() {
                   radiusX={el.width / 2}
                   radiusY={el.height / 2}
                   fill={el.fill}
+                  stroke={el.stroke}
+                  strokeWidth={el.strokeWidth}
                   rotation={el.rotation}
                   draggable
                   onDragEnd={(e) =>
@@ -616,6 +654,118 @@ export default function Board() {
                     node.scaleY(1);
                     const w = Math.max(20, el.width * scaleX);
                     const h = Math.max(20, el.height * scaleY);
+                    updateElement({
+                      ...el,
+                      x: node.x() - w / 2,
+                      y: node.y() - h / 2,
+                      rotation: node.rotation(),
+                      width: w,
+                      height: h,
+                    });
+                  }}
+                />
+              );
+            }
+            if (el.type === 'triangle') {
+              return (
+                <RegularPolygon
+                  {...common}
+                  x={el.x + el.width / 2}
+                  y={el.y + el.height / 2}
+                  sides={3}
+                  radius={el.width / 2}
+                  scaleY={el.height / el.width}
+                  fill={el.fill}
+                  stroke={el.stroke}
+                  strokeWidth={el.strokeWidth}
+                  rotation={el.rotation}
+                  draggable
+                  onDragEnd={(e) =>
+                    updateElement({ ...el, x: e.target.x() - el.width / 2, y: e.target.y() - el.height / 2 })
+                  }
+                  onTransformEnd={(e) => {
+                    const node = e.target as Konva.RegularPolygon;
+                    const scaleX = node.scaleX();
+                    const scaleY = node.scaleY();
+                    node.scaleX(1);
+                    node.scaleY(1);
+                    const w = Math.max(20, el.width * scaleX);
+                    const h = Math.max(20, el.width * scaleY);
+                    updateElement({
+                      ...el,
+                      x: node.x() - w / 2,
+                      y: node.y() - h / 2,
+                      rotation: node.rotation(),
+                      width: w,
+                      height: h,
+                    });
+                  }}
+                />
+              );
+            }
+            if (el.type === 'diamond') {
+              return (
+                <RegularPolygon
+                  {...common}
+                  x={el.x + el.width / 2}
+                  y={el.y + el.height / 2}
+                  sides={4}
+                  radius={el.width / 2}
+                  scaleY={el.height / el.width}
+                  fill={el.fill}
+                  stroke={el.stroke}
+                  strokeWidth={el.strokeWidth}
+                  rotation={el.rotation}
+                  draggable
+                  onDragEnd={(e) =>
+                    updateElement({ ...el, x: e.target.x() - el.width / 2, y: e.target.y() - el.height / 2 })
+                  }
+                  onTransformEnd={(e) => {
+                    const node = e.target as Konva.RegularPolygon;
+                    const scaleX = node.scaleX();
+                    const scaleY = node.scaleY();
+                    node.scaleX(1);
+                    node.scaleY(1);
+                    const w = Math.max(20, el.width * scaleX);
+                    const h = Math.max(20, el.width * scaleY);
+                    updateElement({
+                      ...el,
+                      x: node.x() - w / 2,
+                      y: node.y() - h / 2,
+                      rotation: node.rotation(),
+                      width: w,
+                      height: h,
+                    });
+                  }}
+                />
+              );
+            }
+            if (el.type === 'star') {
+              return (
+                <Star
+                  {...common}
+                  x={el.x + el.width / 2}
+                  y={el.y + el.height / 2}
+                  numPoints={5}
+                  innerRadius={el.width / 4}
+                  outerRadius={el.width / 2}
+                  scaleY={el.height / el.width}
+                  fill={el.fill}
+                  stroke={el.stroke}
+                  strokeWidth={el.strokeWidth}
+                  rotation={el.rotation}
+                  draggable
+                  onDragEnd={(e) =>
+                    updateElement({ ...el, x: e.target.x() - el.width / 2, y: e.target.y() - el.height / 2 })
+                  }
+                  onTransformEnd={(e) => {
+                    const node = e.target as Konva.Star;
+                    const scaleX = node.scaleX();
+                    const scaleY = node.scaleY();
+                    node.scaleX(1);
+                    node.scaleY(1);
+                    const w = Math.max(20, el.width * scaleX);
+                    const h = Math.max(20, el.width * scaleY);
                     updateElement({
                       ...el,
                       x: node.x() - w / 2,
@@ -777,6 +927,62 @@ export default function Board() {
                 }}
               />
             </>
+          );
+        })()}
+
+      {selectedId &&
+        (() => {
+          const el = elements.find((e) => e.id === selectedId);
+          if (!el) return null;
+          const isShape = SHAPE_TYPES.has(el.type);
+          const isLine = el.type === 'arrow' || el.type === 'line';
+          if (!isShape && !isLine) return null;
+          const shape = el as ShapeElement;
+          return (
+            <div className="board-props-panel">
+              {isShape && (
+                <label className="board-props-row">
+                  <span>Fill</span>
+                  <input
+                    type="color"
+                    value={shape.fill && shape.fill.startsWith('#') ? shape.fill : '#74C0FC'}
+                    onChange={(e) => updateElement({ ...shape, fill: e.target.value })}
+                  />
+                </label>
+              )}
+              <label className="board-props-row">
+                <span>Outline</span>
+                <input
+                  type="color"
+                  value={shape.stroke && shape.stroke.startsWith('#') ? shape.stroke : '#1a1a1a'}
+                  onChange={(e) => updateElement({ ...shape, stroke: e.target.value })}
+                />
+              </label>
+              <label className="board-props-row">
+                <span>Thickness</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={20}
+                  value={shape.strokeWidth}
+                  onChange={(e) => updateElement({ ...shape, strokeWidth: Number(e.target.value) })}
+                />
+                <span className="board-props-value">{shape.strokeWidth}</span>
+              </label>
+              {el.type === 'rect' && (
+                <label className="board-props-row">
+                  <span>Corner radius</span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={Math.floor(Math.min(shape.width, shape.height) / 2)}
+                    value={shape.cornerRadius ?? 0}
+                    onChange={(e) => updateElement({ ...shape, cornerRadius: Number(e.target.value) })}
+                  />
+                  <span className="board-props-value">{shape.cornerRadius ?? 0}</span>
+                </label>
+              )}
+            </div>
           );
         })()}
     </div>

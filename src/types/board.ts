@@ -1,4 +1,14 @@
-export type ElementType = 'sticky' | 'text' | 'rect' | 'ellipse' | 'image' | 'arrow' | 'line';
+export type ElementType =
+  | 'sticky'
+  | 'text'
+  | 'rect'
+  | 'ellipse'
+  | 'triangle'
+  | 'diamond'
+  | 'star'
+  | 'image'
+  | 'arrow'
+  | 'line';
 
 export interface BaseElement {
   id: string;
@@ -33,8 +43,9 @@ export interface TextElement extends BaseElement, TextStyle {
 }
 
 export interface ShapeElement extends BaseElement {
-  type: 'rect' | 'ellipse';
+  type: 'rect' | 'ellipse' | 'triangle' | 'diamond' | 'star';
   strokeWidth: number;
+  cornerRadius?: number;
 }
 
 export interface ImageElement extends BaseElement {
