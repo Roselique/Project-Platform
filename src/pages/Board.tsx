@@ -85,10 +85,16 @@ export default function Board() {
   const colorIndexRef = useRef(0);
   const drawingLineRef = useRef<string | null>(null);
   const saveTimer = useRef<number | null>(null);
+  const pastRef = useRef<BoardElement[][]>([]);
+  const futureRef = useRef<BoardElement[][]>([]);
+  const elementsRef = useRef<BoardElement[]>(elements);
 
   useEffect(() => {
     if (board) {
       setElements(board.elements);
+      elementsRef.current = board.elements;
+      pastRef.current = [];
+      futureRef.current = [];
       setScale(board.camera.scale);
       setPos({ x: board.camera.x, y: board.camera.y });
       setNameValue(board.name);
@@ -116,15 +122,40 @@ export default function Board() {
   );
 
   const applyElements = useCallback(
-    (updater: (prev: BoardElement[]) => BoardElement[]) => {
+    (updater: (prev: BoardElement[]) => BoardElement[], recordHistory = true) => {
       setElements((prev) => {
         const next = updater(prev);
+        if (recordHistory) {
+          pastRef.current = [...pastRef.current.slice(-49), prev];
+          futureRef.current = [];
+        }
+        elementsRef.current = next;
         scheduleSave(next);
         return next;
       });
     },
     [scheduleSave]
   );
+
+  const undo = useCallback(() => {
+    if (pastRef.current.length === 0) return;
+    const previous = pastRef.current[pastRef.current.length - 1];
+    pastRef.current = pastRef.current.slice(0, -1);
+    futureRef.current = [...futureRef.current, elementsRef.current];
+    elementsRef.current = previous;
+    setElements(previous);
+    scheduleSave(previous);
+  }, [scheduleSave]);
+
+  const redo = useCallback(() => {
+    if (futureRef.current.length === 0) return;
+    const next = futureRef.current[futureRef.current.length - 1];
+    futureRef.current = futureRef.current.slice(0, -1);
+    pastRef.current = [...pastRef.current, elementsRef.current];
+    elementsRef.current = next;
+    setElements(next);
+    scheduleSave(next);
+  }, [scheduleSave]);
 
   useEffect(() => {
     if (!id) return;
@@ -244,12 +275,14 @@ export default function Board() {
       const pointer = stage.getPointerPosition();
       if (!pointer) return;
       const world = screenToWorld(pointer.x, pointer.y);
-      applyElements((prev) =>
-        prev.map((el) =>
-          el.id === drawingLineRef.current && (el.type === 'arrow' || el.type === 'line')
-            ? { ...el, points: [el.points[0], el.points[1], world.x, world.y] }
-            : el
-        )
+      applyElements(
+        (prev) =>
+          prev.map((el) =>
+            el.id === drawingLineRef.current && (el.type === 'arrow' || el.type === 'line')
+              ? { ...el, points: [el.points[0], el.points[1], world.x, world.y] }
+              : el
+          ),
+        false
       );
     }
   }
@@ -314,11 +347,25 @@ export default function Board() {
     function onKeyDown(e: KeyboardEvent) {
       const activeTag = document.activeElement?.tagName;
       if (activeTag === 'INPUT' || activeTag === 'TEXTAREA') return;
-      if (e.key === 'Backspace' || e.key === 'Delete') {
-        deleteSelected();
-      } else if ((e.metaKey || e.ctrlKey) && e.key === 'd') {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') {
+        e.preventDefault();
+        if (e.shiftKey) redo();
+        else undo();
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'y') {
+        e.preventDefault();
+        redo();
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'd') {
         e.preventDefault();
         duplicateSelected();
+        return;
+      }
+      if (e.metaKey || e.ctrlKey) return;
+      if (e.key === 'Backspace' || e.key === 'Delete') {
+        deleteSelected();
       } else if (e.key === 'v') setTool('select');
       else if (e.key === 's') setTool('sticky');
       else if (e.key === 't') setTool('text');
@@ -413,6 +460,13 @@ export default function Board() {
         </button>
         <input ref={fileInputRef} type="file" accept="image/*" hidden onChange={handleImageUpload} />
         <div className="board-toolbar__divider" />
+        <button className="board-toolbar__btn" onClick={undo} title="Undo (Cmd+Z)">
+          ↺
+        </button>
+        <button className="board-toolbar__btn" onClick={redo} title="Redo (Cmd+Shift+Z)">
+          ↻
+        </button>
+        <div className="board-toolbar__divider" />
         <button className="board-toolbar__btn" onClick={duplicateSelected} disabled={!selectedId} title="Duplicate (Cmd+D)">
           ⧉
         </button>
@@ -471,22 +525,41 @@ export default function Board() {
               );
             }
             if (el.type === 'text') {
+              const fontStyle = [el.bold ? 'bold' : '', el.italic ? 'italic' : ''].filter(Boolean).join(' ') || 'normal';
               return (
                 <Text
                   {...common}
                   x={el.x}
                   y={el.y}
+                  width={el.width}
                   text={el.text || 'Text'}
                   fontSize={el.fontSize}
+                  fontStyle={fontStyle}
+                  textDecoration={el.underline ? 'underline' : ''}
                   fill={el.color}
                   fontFamily="'Inter', sans-serif"
+                  wrap="word"
                   draggable
                   rotation={el.rotation}
+                  visible={editingTextId !== el.id}
                   onDblClick={() => {
                     setEditingTextId(el.id);
                     setEditingValue(el.text);
                   }}
                   onDragEnd={(e) => updateElement({ ...el, x: e.target.x(), y: e.target.y() })}
+                  onTransformEnd={(e) => {
+                    const node = e.target as Konva.Text;
+                    const scaleX = node.scaleX();
+                    node.scaleX(1);
+                    node.scaleY(1);
+                    updateElement({
+                      ...el,
+                      x: node.x(),
+                      y: node.y(),
+                      rotation: node.rotation(),
+                      width: Math.max(40, el.width * scaleX),
+                    });
+                  }}
                 />
               );
             }
@@ -607,6 +680,11 @@ export default function Board() {
             ref={trRef}
             rotateEnabled
             flipEnabled={false}
+            enabledAnchors={
+              elements.find((e) => e.id === selectedId)?.type === 'text'
+                ? ['middle-left', 'middle-right']
+                : undefined
+            }
             boundBoxFunc={(oldBox, newBox) => (newBox.width < 20 || newBox.height < 20 ? oldBox : newBox)}
           />
         </Layer>
@@ -615,38 +693,90 @@ export default function Board() {
       {editingTextId &&
         (() => {
           const el = elements.find((e) => e.id === editingTextId);
-          if (!el) return null;
+          if (!el || (el.type !== 'sticky' && el.type !== 'text')) return null;
           const screenX = el.x * scale + pos.x;
           const screenY = el.y * scale + pos.y;
           const isSticky = el.type === 'sticky';
+
+          function toggleStyle(key: 'bold' | 'italic' | 'underline') {
+            if (!el) return;
+            updateElement({ ...(el as any), [key]: !(el as any)[key] });
+          }
+
+          function commitAndClose() {
+            if (!el) return;
+            updateElement({ ...(el as any), text: editingValue });
+            setEditingTextId(null);
+          }
+
           return (
-            <textarea
-              autoFocus
-              className={isSticky ? 'board-editor board-editor--sticky' : 'board-editor'}
-              style={{
-                left: screenX,
-                top: screenY,
-                width: el.width * scale,
-                height: (isSticky ? el.height : 60) * scale,
-                fontSize: (el as any).fontSize * scale,
-                background: isSticky ? (el as any).fill : 'transparent',
-                color: isSticky ? '#1a1a1a' : (el as any).color,
-              }}
-              value={editingValue}
-              onChange={(e) => setEditingValue(e.target.value)}
-              onBlur={() => {
-                updateElement({ ...(el as any), text: editingValue });
-                setEditingTextId(null);
-              }}
-              onKeyDown={(e) => {
-                if (e.key === 'Escape') setEditingTextId(null);
-                if (e.key === 'Enter' && !isSticky && !e.shiftKey) {
-                  e.preventDefault();
-                  updateElement({ ...(el as any), text: editingValue });
-                  setEditingTextId(null);
-                }
-              }}
-            />
+            <>
+              <div
+                className="board-format-toolbar"
+                style={{ left: screenX, top: screenY - 44 }}
+                onMouseDown={(e) => e.preventDefault()}
+              >
+                <button
+                  className={`board-format-btn ${el.bold ? 'is-active' : ''}`}
+                  onClick={() => toggleStyle('bold')}
+                  title="Bold"
+                >
+                  B
+                </button>
+                <button
+                  className={`board-format-btn board-format-btn--italic ${el.italic ? 'is-active' : ''}`}
+                  onClick={() => toggleStyle('italic')}
+                  title="Italic"
+                >
+                  I
+                </button>
+                <button
+                  className={`board-format-btn board-format-btn--underline ${el.underline ? 'is-active' : ''}`}
+                  onClick={() => toggleStyle('underline')}
+                  title="Underline"
+                >
+                  U
+                </button>
+              </div>
+              <textarea
+                autoFocus
+                className={isSticky ? 'board-editor board-editor--sticky' : 'board-editor'}
+                style={{
+                  left: screenX,
+                  top: screenY,
+                  width: el.width * scale,
+                  height: (isSticky ? el.height : Math.max(el.height, 60)) * scale,
+                  fontSize: (el as any).fontSize * scale,
+                  fontWeight: el.bold ? 700 : 400,
+                  fontStyle: el.italic ? 'italic' : 'normal',
+                  textDecoration: el.underline ? 'underline' : 'none',
+                  background: isSticky ? (el as any).fill : 'transparent',
+                  color: isSticky ? '#1a1a1a' : (el as any).color,
+                }}
+                value={editingValue}
+                onChange={(e) => setEditingValue(e.target.value)}
+                onBlur={commitAndClose}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') setEditingTextId(null);
+                  if (e.key === 'Enter' && !isSticky && !e.shiftKey) {
+                    e.preventDefault();
+                    commitAndClose();
+                  }
+                  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'b') {
+                    e.preventDefault();
+                    toggleStyle('bold');
+                  }
+                  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'i') {
+                    e.preventDefault();
+                    toggleStyle('italic');
+                  }
+                  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'u') {
+                    e.preventDefault();
+                    toggleStyle('underline');
+                  }
+                }}
+              />
+            </>
           );
         })()}
     </div>
@@ -699,6 +829,8 @@ function StickyNote({ el, isSelected, onChange, onDblClick, onClick, onTap, id, 
           height={el.height - 24}
           text={el.text}
           fontSize={el.fontSize}
+          fontStyle={[el.bold ? 'bold' : '', el.italic ? 'italic' : ''].filter(Boolean).join(' ') || 'normal'}
+          textDecoration={el.underline ? 'underline' : ''}
           fontFamily="'Inter', sans-serif"
           fill="#1a1a1a"
           rotation={el.rotation}

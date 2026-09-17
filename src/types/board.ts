@@ -13,13 +13,19 @@ export interface BaseElement {
   draggable: boolean;
 }
 
-export interface StickyElement extends BaseElement {
+export interface TextStyle {
+  bold?: boolean;
+  italic?: boolean;
+  underline?: boolean;
+}
+
+export interface StickyElement extends BaseElement, TextStyle {
   type: 'sticky';
   text: string;
   fontSize: number;
 }
 
-export interface TextElement extends BaseElement {
+export interface TextElement extends BaseElement, TextStyle {
   type: 'text';
   text: string;
   fontSize: number;
@@ -52,4 +58,12 @@ export interface Board {
   thumbnail?: string;
   elements: BoardElement[];
   camera: { x: number; y: number; scale: number };
+  folderId?: string | null;
+}
+
+export interface Folder {
+  id: string;
+  name: string;
+  createdAt: number;
+  color: string;
 }
