@@ -597,37 +597,105 @@ export default function Board() {
     return () => window.removeEventListener('keydown', onKeyDown);
   });
 
+  const addImageElement = useCallback(
+    (src: string, loadImg: HTMLImageElement) => {
+      const maxDim = 320;
+      const ratio = Math.min(maxDim / loadImg.width, maxDim / loadImg.height, 1);
+      const idNew = makeId(8);
+      const el: ImageElement = {
+        id: idNew,
+        type: 'image',
+        x: (window.innerWidth / 2 - pos.x) / scale - (loadImg.width * ratio) / 2,
+        y: (window.innerHeight / 2 - pos.y) / scale - (loadImg.height * ratio) / 2,
+        width: loadImg.width * ratio,
+        height: loadImg.height * ratio,
+        rotation: 0,
+        fill: 'transparent',
+        draggable: true,
+        src,
+      };
+      applyElements((prev) => [...prev, el]);
+      setSelectedIds([idNew]);
+    },
+    [pos, scale, applyElements]
+  );
+
+  const placeImageFromSrc = useCallback(
+    (src: string) => {
+      const img = new window.Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => addImageElement(src, img);
+      img.onerror = () => {
+        const fallback = new window.Image();
+        fallback.onload = () => addImageElement(src, fallback);
+        fallback.onerror = () => console.error('Could not load pasted image:', src);
+        fallback.src = src;
+      };
+      img.src = src;
+    },
+    [addImageElement]
+  );
+
   function handleImageUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = () => {
-      const src = reader.result as string;
-      const img = new window.Image();
-      img.onload = () => {
-        const maxDim = 320;
-        const ratio = Math.min(maxDim / img.width, maxDim / img.height, 1);
-        const idNew = makeId(8);
-        const el: ImageElement = {
-          id: idNew,
-          type: 'image',
-          x: (window.innerWidth / 2 - pos.x) / scale - (img.width * ratio) / 2,
-          y: (window.innerHeight / 2 - pos.y) / scale - (img.height * ratio) / 2,
-          width: img.width * ratio,
-          height: img.height * ratio,
-          rotation: 0,
-          fill: 'transparent',
-          draggable: true,
-          src,
-        };
-        applyElements((prev) => [...prev, el]);
-        setSelectedIds([idNew]);
-      };
-      img.src = src;
-    };
+    reader.onload = () => placeImageFromSrc(reader.result as string);
     reader.readAsDataURL(file);
     e.target.value = '';
   }
+
+  useEffect(() => {
+    function isImageUrl(str: string) {
+      if (str.startsWith('data:image')) return true;
+      try {
+        const u = new URL(str);
+        return /\.(png|jpe?g|gif|webp|svg|avif|bmp)(\?.*)?$/i.test(u.pathname);
+      } catch {
+        return false;
+      }
+    }
+
+    function handlePaste(e: ClipboardEvent) {
+      const activeTag = document.activeElement?.tagName;
+      if (activeTag === 'INPUT' || activeTag === 'TEXTAREA') return;
+
+      const items = e.clipboardData?.items;
+      if (items) {
+        for (const item of items) {
+          if (item.type.startsWith('image/')) {
+            const file = item.getAsFile();
+            if (file) {
+              e.preventDefault();
+              const reader = new FileReader();
+              reader.onload = () => placeImageFromSrc(reader.result as string);
+              reader.readAsDataURL(file);
+              return;
+            }
+          }
+        }
+      }
+
+      const text = e.clipboardData?.getData('text/plain')?.trim();
+      if (text && isImageUrl(text)) {
+        e.preventDefault();
+        placeImageFromSrc(text);
+        return;
+      }
+
+      const html = e.clipboardData?.getData('text/html');
+      if (html) {
+        const match = html.match(/<img[^>]+src="([^"]+)"/i);
+        if (match) {
+          e.preventDefault();
+          placeImageFromSrc(match[1]);
+        }
+      }
+    }
+
+    window.addEventListener('paste', handlePaste);
+    return () => window.removeEventListener('paste', handlePaste);
+  }, [placeImageFromSrc]);
 
   const cursor = useMemo(() => {
     if (tool === 'select') return isPanning ? 'grabbing' : 'default';
