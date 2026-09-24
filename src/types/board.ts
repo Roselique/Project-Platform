@@ -35,6 +35,7 @@ export interface TextStyle {
   bold?: boolean;
   italic?: boolean;
   underline?: boolean;
+  fontFamily?: string;
 }
 
 export interface StickyElement extends BaseElement, TextStyle {

@@ -21,6 +21,35 @@ import './Board.css';
 
 const STICKY_COLORS = ['#FFE066', '#FF9F6B', '#8CE99A', '#74C0FC', '#FFA8CC', '#B197FC'];
 const GRID_SIZE = 32;
+const FONT_SIZE_STEPS = [8, 9, 10, 11, 12, 14, 18, 24, 30, 36, 48, 60, 72, 96];
+const FALLBACK_FONTS = [
+  'Inter',
+  'Arial',
+  'Helvetica',
+  'Times New Roman',
+  'Georgia',
+  'Courier New',
+  'Verdana',
+  'Trebuchet MS',
+  'Palatino',
+  'Garamond',
+  'Segoe UI',
+  'Calibri',
+  'Cambria',
+  'Consolas',
+  'Tahoma',
+  'Comic Sans MS',
+  'Impact',
+];
+
+function stepFontSize(current: number, dir: 1 | -1): number {
+  if (dir === 1) {
+    const next = FONT_SIZE_STEPS.find((s) => s > current);
+    return next ?? FONT_SIZE_STEPS[FONT_SIZE_STEPS.length - 1];
+  }
+  const next = [...FONT_SIZE_STEPS].reverse().find((s) => s < current);
+  return next ?? FONT_SIZE_STEPS[0];
+}
 const SHAPE_TYPES = new Set(['rect', 'ellipse', 'triangle', 'diamond', 'star']);
 const CENTERED_TYPES = new Set(['ellipse', 'triangle', 'diamond', 'star']);
 
@@ -132,6 +161,8 @@ export default function Board() {
   const [editingValue, setEditingValue] = useState('');
   const [nameValue, setNameValue] = useState(board?.name ?? '');
   const [isPanning, setIsPanning] = useState(false);
+  const [systemFonts, setSystemFonts] = useState<string[]>([]);
+  const [fontsStatus, setFontsStatus] = useState<'idle' | 'loading' | 'error'>('idle');
 
   const selectedId = selectedIds.length === 1 ? selectedIds[0] : null;
 
@@ -645,6 +676,25 @@ export default function Board() {
     e.target.value = '';
   }
 
+  async function loadSystemFonts() {
+    const w = window as any;
+    if (typeof w.queryLocalFonts !== 'function') {
+      setFontsStatus('error');
+      return;
+    }
+    setFontsStatus('loading');
+    try {
+      const fonts: any[] = await w.queryLocalFonts();
+      const families = Array.from(new Set(fonts.map((f) => f.family as string))).sort((a, b) =>
+        a.localeCompare(b)
+      );
+      setSystemFonts(families);
+      setFontsStatus('idle');
+    } catch {
+      setFontsStatus('error');
+    }
+  }
+
   useEffect(() => {
     function isImageUrl(str: string) {
       if (str.startsWith('data:image')) return true;
@@ -839,7 +889,7 @@ export default function Board() {
                   fontStyle={fontStyle}
                   textDecoration={el.underline ? 'underline' : ''}
                   fill={el.color}
-                  fontFamily="'Inter', sans-serif"
+                  fontFamily={`'${el.fontFamily || 'Inter'}', sans-serif`}
                   wrap="word"
                   draggable
                   rotation={el.rotation}
@@ -1173,13 +1223,58 @@ export default function Board() {
             setEditingTextId(null);
           }
 
+          const fontOptions = Array.from(
+            new Set([el.fontFamily || 'Inter', ...(systemFonts.length ? systemFonts : FALLBACK_FONTS)])
+          );
+
           return (
             <>
               <div
                 className="board-format-toolbar"
-                style={{ left: screenX, top: screenY - 44 }}
+                style={{ left: screenX, top: screenY - 46 }}
                 onMouseDown={(e) => e.preventDefault()}
               >
+                <select
+                  className="board-format-font-select"
+                  value={el.fontFamily || 'Inter'}
+                  onChange={(ev) => updateElement({ ...(el as any), fontFamily: ev.target.value })}
+                  title="Font family"
+                >
+                  {fontOptions.map((f) => (
+                    <option key={f} value={f} style={{ fontFamily: f }}>
+                      {f}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  className="board-format-btn board-format-btn--fonts"
+                  onClick={loadSystemFonts}
+                  title={
+                    fontsStatus === 'error'
+                      ? "Couldn't load fonts from this device (try Chrome/Edge and allow the permission)"
+                      : 'Load every font installed on this computer'
+                  }
+                >
+                  {fontsStatus === 'loading' ? '…' : '⟳'}
+                </button>
+                <div className="board-format-size">
+                  <button onClick={() => updateElement({ ...(el as any), fontSize: stepFontSize(el.fontSize, -1) })} title="Smaller">
+                    −
+                  </button>
+                  <input
+                    type="number"
+                    min={1}
+                    max={400}
+                    value={el.fontSize}
+                    onChange={(ev) => {
+                      const v = Number(ev.target.value);
+                      if (!Number.isNaN(v) && v > 0) updateElement({ ...(el as any), fontSize: v });
+                    }}
+                  />
+                  <button onClick={() => updateElement({ ...(el as any), fontSize: stepFontSize(el.fontSize, 1) })} title="Bigger">
+                    +
+                  </button>
+                </div>
                 <button
                   className={`board-format-btn ${el.bold ? 'is-active' : ''}`}
                   onClick={() => toggleStyle('bold')}
@@ -1211,6 +1306,7 @@ export default function Board() {
                   width: el.width * scale,
                   height: (isSticky ? el.height : Math.max(el.height, 60)) * scale,
                   fontSize: (el as any).fontSize * scale,
+                  fontFamily: `'${el.fontFamily || 'Inter'}', sans-serif`,
                   fontWeight: el.bold ? 700 : 400,
                   fontStyle: el.italic ? 'italic' : 'normal',
                   textDecoration: el.underline ? 'underline' : 'none',
@@ -1515,7 +1611,7 @@ function StickyNote({ el, isSelected, onChange, onDblClick, onClick, onTap, id, 
           fontSize={el.fontSize}
           fontStyle={[el.bold ? 'bold' : '', el.italic ? 'italic' : ''].filter(Boolean).join(' ') || 'normal'}
           textDecoration={el.underline ? 'underline' : ''}
-          fontFamily="'Inter', sans-serif"
+          fontFamily={`'${el.fontFamily || 'Inter'}', sans-serif`}
           fill="#1a1a1a"
           rotation={el.rotation}
           listening={false}

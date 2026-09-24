@@ -178,6 +178,7 @@
   position: fixed;
   z-index: 31;
   display: flex;
+  align-items: center;
   gap: 2px;
   background: #1a1a1a;
   border-radius: 10px;
@@ -212,6 +213,70 @@
 .board-format-btn.is-active {
   background: #ff7a59;
   color: #14100f;
+}
+
+.board-format-btn--fonts {
+  font-size: 15px;
+  font-weight: 400;
+}
+
+.board-format-font-select {
+  max-width: 140px;
+  height: 30px;
+  border-radius: 6px;
+  border: none;
+  background: rgba(255, 255, 255, 0.1);
+  color: #f3f2ef;
+  font-size: 12.5px;
+  padding: 0 6px;
+  cursor: pointer;
+}
+
+.board-format-font-select option {
+  background: #1a1a1a;
+  color: #f3f2ef;
+}
+
+.board-format-size {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 6px;
+  padding: 0 2px;
+}
+
+.board-format-size button {
+  width: 22px;
+  height: 30px;
+  border: none;
+  background: transparent;
+  color: #f3f2ef;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.board-format-size button:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+}
+
+.board-format-size input[type='number'] {
+  width: 38px;
+  height: 30px;
+  border: none;
+  background: transparent;
+  color: #f3f2ef;
+  text-align: center;
+  font-size: 12.5px;
+  -moz-appearance: textfield;
+}
+
+.board-format-size input[type='number']::-webkit-outer-spin-button,
+.board-format-size input[type='number']::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
 }
 
 .board-props-panel {
