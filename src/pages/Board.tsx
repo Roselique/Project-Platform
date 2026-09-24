@@ -117,8 +117,7 @@ function CanvasImage({ el, isSelected, onSelect, onChange, dragSync }: any) {
       onDragStart={dragSync.onStart}
       onDragMove={dragSync.onMove}
       onDragEnd={(e) => {
-        if (dragSync.active) {
-          dragSync.onEnd();
+        if (dragSync.onEnd()) {
           return;
         }
         onChange({ ...el, x: e.target.x(), y: e.target.y() });
@@ -178,6 +177,11 @@ export default function Board() {
   const futureRef = useRef<BoardElement[][]>([]);
   const elementsRef = useRef<BoardElement[]>(elements);
   const dragBaselineRef = useRef<Map<string, { x: number; y: number }>>(new Map());
+  const altDragRef = useRef<{
+    idMap: Map<string, string>;
+    baseline: Map<string, { x: number; y: number }>;
+    activeOriginalId: string;
+  } | null>(null);
 
   useEffect(() => {
     if (board) {
@@ -348,6 +352,19 @@ export default function Board() {
     });
   }
 
+  function applyNodeFinalPosition(el: BoardElement, node: Konva.Node): BoardElement {
+    if (el.type === 'arrow' || el.type === 'line') {
+      const dx = node.x();
+      const dy = node.y();
+      node.position({ x: 0, y: 0 });
+      return { ...el, points: el.points.map((p, i) => (i % 2 === 0 ? p + dx : p + dy)) };
+    }
+    if (CENTERED_TYPES.has(el.type)) {
+      return { ...el, x: node.x() - el.width / 2, y: node.y() - el.height / 2 };
+    }
+    return { ...el, x: node.x(), y: node.y() };
+  }
+
   function handleGroupDragStart(activeId: string) {
     const layer = layerRef.current;
     if (!layer || selectedIds.length < 2 || !selectedIds.includes(activeId)) return;
@@ -384,19 +401,99 @@ export default function Board() {
       const el = elementsRef.current.find((e) => e.id === sid);
       const node = layer.findOne(`#${sid}`);
       if (!el || !node) continue;
-      if (el.type === 'arrow' || el.type === 'line') {
-        const dx = node.x();
-        const dy = node.y();
-        node.position({ x: 0, y: 0 });
-        updates.set(sid, { ...el, points: el.points.map((p, i) => (i % 2 === 0 ? p + dx : p + dy)) });
-      } else if (CENTERED_TYPES.has(el.type)) {
-        updates.set(sid, { ...el, x: node.x() - el.width / 2, y: node.y() - el.height / 2 });
-      } else {
-        updates.set(sid, { ...el, x: node.x(), y: node.y() });
-      }
+      updates.set(sid, applyNodeFinalPosition(el, node));
     }
     applyElements((prev) => prev.map((e) => updates.get(e.id) ?? e));
     dragBaselineRef.current = new Map();
+  }
+
+  function startAltDrag(activeId: string) {
+    const layer = layerRef.current;
+    if (!layer) return;
+    const ids = selectedIds.includes(activeId) && selectedIds.length > 0 ? selectedIds : [activeId];
+    const idMap = new Map<string, string>();
+    const groupIdMap = new Map<string, string>();
+    const baseline = new Map<string, { x: number; y: number }>();
+    const newEls: BoardElement[] = [];
+    for (const sid of ids) {
+      const orig = elementsRef.current.find((e) => e.id === sid);
+      const node = layer.findOne(`#${sid}`);
+      if (!orig || !node) continue;
+      const newId = makeId(8);
+      idMap.set(sid, newId);
+      baseline.set(sid, { x: node.x(), y: node.y() });
+      let newGroupId = orig.groupId;
+      if (orig.groupId) {
+        if (!groupIdMap.has(orig.groupId)) groupIdMap.set(orig.groupId, makeId(8));
+        newGroupId = groupIdMap.get(orig.groupId);
+      }
+      newEls.push({ ...orig, id: newId, groupId: newGroupId });
+    }
+    if (newEls.length === 0) return;
+    applyElements((prev) => [...prev, ...newEls]);
+    altDragRef.current = { idMap, baseline, activeOriginalId: activeId };
+  }
+
+  function moveAltDrag(activeId: string, node: Konva.Node) {
+    const alt = altDragRef.current;
+    const layer = layerRef.current;
+    if (!alt || !layer) return;
+    const activeBase = alt.baseline.get(activeId);
+    if (!activeBase) return;
+    const dx = node.x() - activeBase.x;
+    const dy = node.y() - activeBase.y;
+    node.position({ x: activeBase.x, y: activeBase.y });
+    for (const [origId, dupId] of alt.idMap) {
+      const base = alt.baseline.get(origId);
+      const dupNode = layer.findOne(`#${dupId}`);
+      if (base && dupNode) dupNode.position({ x: base.x + dx, y: base.y + dy });
+    }
+    layer.batchDraw();
+  }
+
+  function endAltDrag() {
+    const alt = altDragRef.current;
+    const layer = layerRef.current;
+    if (!alt || !layer) return;
+    const updates = new Map<string, BoardElement>();
+    for (const [, dupId] of alt.idMap) {
+      const dupEl = elementsRef.current.find((e) => e.id === dupId);
+      const dupNode = layer.findOne(`#${dupId}`);
+      if (!dupEl || !dupNode) continue;
+      updates.set(dupId, applyNodeFinalPosition(dupEl, dupNode));
+    }
+    applyElements((prev) => prev.map((e) => updates.get(e.id) ?? e));
+    setSelectedIds(Array.from(alt.idMap.values()));
+    altDragRef.current = null;
+  }
+
+  function handleAnyDragStart(elId: string, evt: Konva.KonvaEventObject<DragEvent>) {
+    const nativeEvt = evt?.evt as unknown as MouseEvent | undefined;
+    if (nativeEvt?.altKey) {
+      startAltDrag(elId);
+      return;
+    }
+    handleGroupDragStart(elId);
+  }
+
+  function handleAnyDragMove(elId: string, node: Konva.Node) {
+    if (altDragRef.current) {
+      moveAltDrag(elId, node);
+      return;
+    }
+    handleGroupDragMove(elId, node);
+  }
+
+  function handleAnyDragEnd(elId: string): boolean {
+    if (altDragRef.current && altDragRef.current.activeOriginalId === elId) {
+      endAltDrag();
+      return true;
+    }
+    if (selectedIds.length > 1 && selectedIds.includes(elId)) {
+      handleGroupDragEnd();
+      return true;
+    }
+    return false;
   }
 
   function groupSelected() {
@@ -808,7 +905,12 @@ export default function Board() {
           ↻
         </button>
         <div className="board-toolbar__divider" />
-        <button className="board-toolbar__btn" onClick={duplicateSelected} disabled={selectedIds.length === 0} title="Duplicate (Cmd+D)">
+        <button
+          className="board-toolbar__btn"
+          onClick={duplicateSelected}
+          disabled={selectedIds.length === 0}
+          title="Duplicate (Cmd+D, or hold Alt and drag)"
+        >
           ⧉
         </button>
         <button className="board-toolbar__btn" onClick={deleteSelected} disabled={selectedIds.length === 0} title="Delete">
@@ -843,12 +945,10 @@ export default function Board() {
         <Layer ref={layerRef}>
           {elements.map((el) => {
             const isSelected = selectedIds.includes(el.id);
-            const isMultiActive = selectedIds.length > 1 && isSelected;
             const dragSync = {
-              active: isMultiActive,
-              onStart: () => handleGroupDragStart(el.id),
-              onMove: (e: Konva.KonvaEventObject<DragEvent>) => handleGroupDragMove(el.id, e.target),
-              onEnd: () => handleGroupDragEnd(),
+              onStart: (e: Konva.KonvaEventObject<DragEvent>) => handleAnyDragStart(el.id, e),
+              onMove: (e: Konva.KonvaEventObject<DragEvent>) => handleAnyDragMove(el.id, e.target),
+              onEnd: () => handleAnyDragEnd(el.id),
             };
             const common = {
               key: el.id,
@@ -901,8 +1001,7 @@ export default function Board() {
                     setEditingValue(el.text);
                   }}
                   onDragEnd={(e) => {
-                    if (dragSync.active) {
-                      dragSync.onEnd();
+                    if (dragSync.onEnd()) {
                       return;
                     }
                     updateElement({ ...el, x: e.target.x(), y: e.target.y() });
@@ -938,8 +1037,7 @@ export default function Board() {
                   rotation={el.rotation}
                   draggable
                   onDragEnd={(e) => {
-                    if (dragSync.active) {
-                      dragSync.onEnd();
+                    if (dragSync.onEnd()) {
                       return;
                     }
                     updateElement({ ...el, x: e.target.x(), y: e.target.y() });
@@ -976,8 +1074,7 @@ export default function Board() {
                   rotation={el.rotation}
                   draggable
                   onDragEnd={(e) => {
-                    if (dragSync.active) {
-                      dragSync.onEnd();
+                    if (dragSync.onEnd()) {
                       return;
                     }
                     updateElement({ ...el, x: e.target.x() - el.width / 2, y: e.target.y() - el.height / 2 });
@@ -1017,8 +1114,7 @@ export default function Board() {
                   rotation={el.rotation}
                   draggable
                   onDragEnd={(e) => {
-                    if (dragSync.active) {
-                      dragSync.onEnd();
+                    if (dragSync.onEnd()) {
                       return;
                     }
                     updateElement({ ...el, x: e.target.x() - el.width / 2, y: e.target.y() - el.height / 2 });
@@ -1058,8 +1154,7 @@ export default function Board() {
                   rotation={el.rotation}
                   draggable
                   onDragEnd={(e) => {
-                    if (dragSync.active) {
-                      dragSync.onEnd();
+                    if (dragSync.onEnd()) {
                       return;
                     }
                     updateElement({ ...el, x: e.target.x() - el.width / 2, y: e.target.y() - el.height / 2 });
@@ -1100,8 +1195,7 @@ export default function Board() {
                   rotation={el.rotation}
                   draggable
                   onDragEnd={(e) => {
-                    if (dragSync.active) {
-                      dragSync.onEnd();
+                    if (dragSync.onEnd()) {
                       return;
                     }
                     updateElement({ ...el, x: e.target.x() - el.width / 2, y: e.target.y() - el.height / 2 });
@@ -1136,8 +1230,7 @@ export default function Board() {
                   strokeWidth={el.strokeWidth}
                   draggable
                   onDragEnd={(e) => {
-                    if (dragSync.active) {
-                      dragSync.onEnd();
+                    if (dragSync.onEnd()) {
                       return;
                     }
                     const dx = e.target.x();
@@ -1162,8 +1255,7 @@ export default function Board() {
                   lineJoin="round"
                   draggable
                   onDragEnd={(e) => {
-                    if (dragSync.active) {
-                      dragSync.onEnd();
+                    if (dragSync.onEnd()) {
                       return;
                     }
                     const dx = e.target.x();
@@ -1671,8 +1763,7 @@ function StickyNote({ el, isSelected, onChange, onDblClick, onClick, onTap, id, 
         onDragStart={dragSync.onStart}
         onDragMove={dragSync.onMove}
         onDragEnd={(e: any) => {
-          if (dragSync.active) {
-            dragSync.onEnd();
+          if (dragSync.onEnd()) {
             return;
           }
           onChange({ ...el, x: e.target.x(), y: e.target.y() });
