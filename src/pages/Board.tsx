@@ -1349,6 +1349,8 @@ export default function Board() {
           const isLine = selectedEls.some((e) => e.type === 'arrow' || e.type === 'line');
           const isText = selectedEls.some((e) => TEXT_TYPES.has(e.type));
           const textRep: any = selectedEls.find((e) => TEXT_TYPES.has(e.type));
+          const isSticky = selectedEls.some((e) => e.type === 'sticky');
+          const stickyRep: any = selectedEls.find((e) => e.type === 'sticky');
           const shapeRep: any =
             selectedEls.find((e) => SHAPE_TYPES.has(e.type)) ??
             selectedEls.find((e) => e.type === 'arrow' || e.type === 'line');
@@ -1364,6 +1366,34 @@ export default function Board() {
 
           return (
             <div className="board-props-panel">
+              {isSticky && stickyRep && (
+                <>
+                  <div className="board-props-row">
+                    <span>Colour</span>
+                    <div className="board-props-swatches">
+                      {STICKY_COLORS.map((c) => (
+                        <button
+                          key={c}
+                          className={`board-props-swatch ${stickyRep.fill === c ? 'is-active' : ''}`}
+                          style={{ background: c }}
+                          onClick={() => updateSelected((el2) => (el2.type === 'sticky' ? { fill: c } : {}))}
+                          title={c}
+                        />
+                      ))}
+                      <input
+                        type="color"
+                        className="board-props-swatch board-props-swatch--custom"
+                        value={stickyRep.fill && stickyRep.fill.startsWith('#') ? stickyRep.fill : '#FFE066'}
+                        onChange={(e) =>
+                          updateSelected((el2) => (el2.type === 'sticky' ? { fill: e.target.value } : {}))
+                        }
+                        title="Custom colour"
+                      />
+                    </div>
+                  </div>
+                  <div className="board-props-divider" />
+                </>
+              )}
               {isText && textRep && (
                 <>
                   <label className="board-props-row">
@@ -1628,10 +1658,10 @@ function StickyNote({ el, isSelected, onChange, onDblClick, onClick, onTap, id, 
         height={el.height}
         fill={el.fill}
         cornerRadius={4}
-        shadowColor="rgba(0,0,0,0.25)"
-        shadowBlur={12}
-        shadowOffset={{ x: 0, y: 6 }}
-        shadowOpacity={isSelected ? 0.4 : 0.2}
+        shadowColor="rgba(0,0,0,0.45)"
+        shadowBlur={18}
+        shadowOffset={{ x: 0, y: 10 }}
+        shadowOpacity={isSelected ? 0.6 : 0.45}
         rotation={el.rotation}
         draggable
         onClick={onClick}
