@@ -22,8 +22,41 @@ import './Board.css';
 const STICKY_COLORS = ['#FFE066', '#FF9F6B', '#8CE99A', '#74C0FC', '#FFA8CC', '#B197FC'];
 const GRID_SIZE = 32;
 const SHAPE_TYPES = new Set(['rect', 'ellipse', 'triangle', 'diamond', 'star']);
+const CENTERED_TYPES = new Set(['ellipse', 'triangle', 'diamond', 'star']);
 
 type Tool = 'select' | 'sticky' | 'text' | 'rect' | 'ellipse' | 'triangle' | 'diamond' | 'star' | 'arrow' | 'pen';
+
+function hexToRgba(hex: string | undefined, alpha: number): string {
+  if (!hex || hex === 'transparent') return 'rgba(0,0,0,0)';
+  if (hex.startsWith('rgba') || hex.startsWith('rgb')) return hex;
+  let h = hex.replace('#', '');
+  if (h.length === 3) h = h.split('').map((c) => c + c).join('');
+  const r = parseInt(h.substring(0, 2), 16);
+  const g = parseInt(h.substring(2, 4), 16);
+  const b = parseInt(h.substring(4, 6), 16);
+  if (Number.isNaN(r) || Number.isNaN(g) || Number.isNaN(b)) return hex;
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+function getFillProps(el: ShapeElement, centered: boolean) {
+  const alpha = el.fillOpacity ?? 1;
+  if (el.fillGradient) {
+    const start = centered ? { x: -el.width / 2, y: -el.height / 2 } : { x: 0, y: 0 };
+    const end = centered ? { x: el.width / 2, y: el.height / 2 } : { x: el.width, y: el.height };
+    return {
+      fillPriority: 'linear-gradient' as const,
+      fillLinearGradientStartPoint: start,
+      fillLinearGradientEndPoint: end,
+      fillLinearGradientColorStops: [
+        0,
+        hexToRgba(el.fillGradient.from, alpha),
+        1,
+        hexToRgba(el.fillGradient.to, alpha),
+      ],
+    };
+  }
+  return { fill: hexToRgba(el.fill, alpha) };
+}
 
 function useImageEl(src: string): HTMLImageElement | undefined {
   const [img, setImg] = useState<HTMLImageElement>();
@@ -35,12 +68,13 @@ function useImageEl(src: string): HTMLImageElement | undefined {
   return img;
 }
 
-function CanvasImage({ el, isSelected, onSelect, onChange }: any) {
+function CanvasImage({ el, isSelected, onSelect, onChange, dragSync }: any) {
   const image = useImageEl(el.src);
   const shapeRef = useRef<Konva.Image>(null);
   return (
     <KonvaImage
       ref={shapeRef}
+      id={el.id}
       image={image}
       x={el.x}
       y={el.y}
@@ -50,7 +84,15 @@ function CanvasImage({ el, isSelected, onSelect, onChange }: any) {
       draggable
       onClick={onSelect}
       onTap={onSelect}
-      onDragEnd={(e) => onChange({ ...el, x: e.target.x(), y: e.target.y() })}
+      onDragStart={dragSync.onStart}
+      onDragMove={dragSync.onMove}
+      onDragEnd={(e) => {
+        if (dragSync.active) {
+          dragSync.onEnd();
+          return;
+        }
+        onChange({ ...el, x: e.target.x(), y: e.target.y() });
+      }}
       onTransformEnd={() => {
         const node = shapeRef.current;
         if (!node) return;
@@ -83,13 +125,15 @@ export default function Board() {
 
   const [elements, setElements] = useState<BoardElement[]>(board?.elements ?? []);
   const [tool, setTool] = useState<Tool>('select');
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [scale, setScale] = useState(board?.camera.scale ?? 1);
   const [pos, setPos] = useState({ x: board?.camera.x ?? 0, y: board?.camera.y ?? 0 });
   const [editingTextId, setEditingTextId] = useState<string | null>(null);
   const [editingValue, setEditingValue] = useState('');
   const [nameValue, setNameValue] = useState(board?.name ?? '');
   const [isPanning, setIsPanning] = useState(false);
+
+  const selectedId = selectedIds.length === 1 ? selectedIds[0] : null;
 
   const stageRef = useRef<Konva.Stage>(null);
   const trRef = useRef<Konva.Transformer>(null);
@@ -101,6 +145,7 @@ export default function Board() {
   const pastRef = useRef<BoardElement[][]>([]);
   const futureRef = useRef<BoardElement[][]>([]);
   const elementsRef = useRef<BoardElement[]>(elements);
+  const dragBaselineRef = useRef<Map<string, { x: number; y: number }>>(new Map());
 
   useEffect(() => {
     if (board) {
@@ -111,6 +156,7 @@ export default function Board() {
       setScale(board.camera.scale);
       setPos({ x: board.camera.x, y: board.camera.y });
       setNameValue(board.name);
+      setSelectedIds([]);
     }
   }, [board?.id]);
 
@@ -177,17 +223,13 @@ export default function Board() {
 
   useEffect(() => {
     if (trRef.current && layerRef.current) {
-      if (selectedId) {
-        const node = layerRef.current.findOne(`#${selectedId}`);
-        if (node) {
-          trRef.current.nodes([node]);
-          trRef.current.getLayer()?.batchDraw();
-          return;
-        }
-      }
-      trRef.current.nodes([]);
+      const nodes = selectedIds
+        .map((sid) => layerRef.current!.findOne(`#${sid}`))
+        .filter((n): n is Konva.Node => !!n);
+      trRef.current.nodes(nodes);
+      trRef.current.getLayer()?.batchDraw();
     }
-  }, [selectedId, elements]);
+  }, [selectedIds, elements]);
 
   if (!id || !board) {
     return (
@@ -250,12 +292,129 @@ export default function Board() {
         return;
     }
     applyElements((prev) => [...prev, el]);
-    setSelectedId(idNew);
+    setSelectedIds([idNew]);
     setTool('select');
     if (type === 'sticky' || type === 'text') {
       setEditingTextId(idNew);
       setEditingValue(type === 'text' ? 'Text' : '');
     }
+  }
+
+  function selectElement(elId: string, additive: boolean) {
+    const target = elementsRef.current.find((e) => e.id === elId);
+    if (!target) return;
+    const groupIds = target.groupId
+      ? elementsRef.current.filter((e) => e.groupId === target.groupId).map((e) => e.id)
+      : [elId];
+    setSelectedIds((prev) => {
+      if (additive) {
+        const allIn = groupIds.every((gid) => prev.includes(gid));
+        if (allIn) return prev.filter((pid) => !groupIds.includes(pid));
+        return Array.from(new Set([...prev, ...groupIds]));
+      }
+      return groupIds;
+    });
+  }
+
+  function handleGroupDragStart(activeId: string) {
+    const layer = layerRef.current;
+    if (!layer || selectedIds.length < 2 || !selectedIds.includes(activeId)) return;
+    const map = new Map<string, { x: number; y: number }>();
+    for (const sid of selectedIds) {
+      const node = layer.findOne(`#${sid}`);
+      if (node) map.set(sid, { x: node.x(), y: node.y() });
+    }
+    dragBaselineRef.current = map;
+  }
+
+  function handleGroupDragMove(activeId: string, node: Konva.Node) {
+    if (selectedIds.length < 2 || !selectedIds.includes(activeId)) return;
+    const baseline = dragBaselineRef.current;
+    const activeBase = baseline.get(activeId);
+    const layer = layerRef.current;
+    if (!activeBase || !layer) return;
+    const dx = node.x() - activeBase.x;
+    const dy = node.y() - activeBase.y;
+    for (const sid of selectedIds) {
+      if (sid === activeId) continue;
+      const base = baseline.get(sid);
+      const n = layer.findOne(`#${sid}`);
+      if (base && n) n.position({ x: base.x + dx, y: base.y + dy });
+    }
+    layer.batchDraw();
+  }
+
+  function handleGroupDragEnd() {
+    const layer = layerRef.current;
+    if (!layer || selectedIds.length < 2) return;
+    const updates = new Map<string, BoardElement>();
+    for (const sid of selectedIds) {
+      const el = elementsRef.current.find((e) => e.id === sid);
+      const node = layer.findOne(`#${sid}`);
+      if (!el || !node) continue;
+      if (el.type === 'arrow' || el.type === 'line') {
+        const dx = node.x();
+        const dy = node.y();
+        node.position({ x: 0, y: 0 });
+        updates.set(sid, { ...el, points: el.points.map((p, i) => (i % 2 === 0 ? p + dx : p + dy)) });
+      } else if (CENTERED_TYPES.has(el.type)) {
+        updates.set(sid, { ...el, x: node.x() - el.width / 2, y: node.y() - el.height / 2 });
+      } else {
+        updates.set(sid, { ...el, x: node.x(), y: node.y() });
+      }
+    }
+    applyElements((prev) => prev.map((e) => updates.get(e.id) ?? e));
+    dragBaselineRef.current = new Map();
+  }
+
+  function groupSelected() {
+    if (selectedIds.length < 2) return;
+    const gid = makeId(8);
+    applyElements((prev) => prev.map((e) => (selectedIds.includes(e.id) ? { ...e, groupId: gid } : e)));
+  }
+
+  function ungroupSelected() {
+    if (selectedIds.length === 0) return;
+    applyElements((prev) => prev.map((e) => (selectedIds.includes(e.id) ? { ...e, groupId: null } : e)));
+  }
+
+  function reorderSelection(mode: 'forward' | 'backward' | 'front' | 'back') {
+    if (selectedIds.length === 0) return;
+    const ids = new Set(selectedIds);
+    applyElements((prev) => {
+      const arr = [...prev];
+      if (mode === 'front') {
+        const sel = arr.filter((e) => ids.has(e.id));
+        const rest = arr.filter((e) => !ids.has(e.id));
+        return [...rest, ...sel];
+      }
+      if (mode === 'back') {
+        const sel = arr.filter((e) => ids.has(e.id));
+        const rest = arr.filter((e) => !ids.has(e.id));
+        return [...sel, ...rest];
+      }
+      if (mode === 'forward') {
+        for (let i = arr.length - 2; i >= 0; i--) {
+          if (ids.has(arr[i].id) && !ids.has(arr[i + 1].id)) {
+            [arr[i], arr[i + 1]] = [arr[i + 1], arr[i]];
+          }
+        }
+        return arr;
+      }
+      for (let i = 1; i < arr.length; i++) {
+        if (ids.has(arr[i].id) && !ids.has(arr[i - 1].id)) {
+          [arr[i - 1], arr[i]] = [arr[i], arr[i - 1]];
+        }
+      }
+      return arr;
+    });
+  }
+
+  function updateSelected(patch: (el: BoardElement) => Partial<BoardElement>) {
+    if (selectedIds.length === 0) return;
+    applyElements((prev) =>
+      prev.map((e) => (selectedIds.includes(e.id) ? ({ ...e, ...patch(e) } as BoardElement) : e))
+    );
   }
 
   function handleStageMouseDown(e: Konva.KonvaEventObject<MouseEvent | TouchEvent>) {
@@ -265,7 +424,7 @@ export default function Board() {
 
     if (tool === 'select') {
       if (clickedOnEmpty) {
-        setSelectedId(null);
+        setSelectedIds([]);
         setIsPanning(true);
       }
       return;
@@ -360,18 +519,31 @@ export default function Board() {
   }
 
   function deleteSelected() {
-    if (!selectedId) return;
-    applyElements((prev) => prev.filter((el) => el.id !== selectedId));
-    setSelectedId(null);
+    if (selectedIds.length === 0) return;
+    const ids = new Set(selectedIds);
+    applyElements((prev) => prev.filter((el) => !ids.has(el.id)));
+    setSelectedIds([]);
   }
 
   function duplicateSelected() {
-    if (!selectedId) return;
-    const el = elements.find((e) => e.id === selectedId);
-    if (!el) return;
-    const copy = { ...el, id: makeId(8), x: el.x + 24, y: el.y + 24 };
-    applyElements((prev) => [...prev, copy]);
-    setSelectedId(copy.id);
+    if (selectedIds.length === 0) return;
+    const ids = new Set(selectedIds);
+    const idMap = new Map<string, string>();
+    const groupIdMap = new Map<string, string>();
+    const copies = elements
+      .filter((e) => ids.has(e.id))
+      .map((el) => {
+        const newId = makeId(8);
+        idMap.set(el.id, newId);
+        let newGroupId: string | null | undefined = el.groupId;
+        if (el.groupId) {
+          if (!groupIdMap.has(el.groupId)) groupIdMap.set(el.groupId, makeId(8));
+          newGroupId = groupIdMap.get(el.groupId);
+        }
+        return { ...el, id: newId, x: el.x + 24, y: el.y + 24, groupId: newGroupId };
+      });
+    applyElements((prev) => [...prev, ...copies]);
+    setSelectedIds(copies.map((c) => c.id));
   }
 
   useEffect(() => {
@@ -394,6 +566,22 @@ export default function Board() {
         duplicateSelected();
         return;
       }
+      if ((e.metaKey || e.ctrlKey) && e.code === 'KeyG') {
+        e.preventDefault();
+        if (e.shiftKey) ungroupSelected();
+        else groupSelected();
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && e.code === 'BracketRight') {
+        e.preventDefault();
+        reorderSelection(e.shiftKey ? 'front' : 'forward');
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && e.code === 'BracketLeft') {
+        e.preventDefault();
+        reorderSelection(e.shiftKey ? 'back' : 'backward');
+        return;
+      }
       if (e.metaKey || e.ctrlKey) return;
       if (e.key === 'Backspace' || e.key === 'Delete') {
         deleteSelected();
@@ -403,7 +591,7 @@ export default function Board() {
       else if (e.key === 'r') setTool('rect');
       else if (e.key === 'o') setTool('ellipse');
       else if (e.key === 'a') setTool('arrow');
-      else if (e.key === 'Escape') setSelectedId(null);
+      else if (e.key === 'Escape') setSelectedIds([]);
     }
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
@@ -433,7 +621,7 @@ export default function Board() {
           src,
         };
         applyElements((prev) => [...prev, el]);
-        setSelectedId(idNew);
+        setSelectedIds([idNew]);
       };
       img.src = src;
     };
@@ -501,10 +689,10 @@ export default function Board() {
           ↻
         </button>
         <div className="board-toolbar__divider" />
-        <button className="board-toolbar__btn" onClick={duplicateSelected} disabled={!selectedId} title="Duplicate (Cmd+D)">
+        <button className="board-toolbar__btn" onClick={duplicateSelected} disabled={selectedIds.length === 0} title="Duplicate (Cmd+D)">
           ⧉
         </button>
-        <button className="board-toolbar__btn" onClick={deleteSelected} disabled={!selectedId} title="Delete">
+        <button className="board-toolbar__btn" onClick={deleteSelected} disabled={selectedIds.length === 0} title="Delete">
           🗑
         </button>
       </div>
@@ -535,12 +723,22 @@ export default function Board() {
         </Layer>
         <Layer ref={layerRef}>
           {elements.map((el) => {
-            const isSelected = el.id === selectedId;
+            const isSelected = selectedIds.includes(el.id);
+            const isMultiActive = selectedIds.length > 1 && isSelected;
+            const dragSync = {
+              active: isMultiActive,
+              onStart: () => handleGroupDragStart(el.id),
+              onMove: (e: Konva.KonvaEventObject<DragEvent>) => handleGroupDragMove(el.id, e.target),
+              onEnd: () => handleGroupDragEnd(),
+            };
             const common = {
               key: el.id,
               id: el.id,
-              onClick: () => tool === 'select' && setSelectedId(el.id),
-              onTap: () => tool === 'select' && setSelectedId(el.id),
+              onClick: (e: Konva.KonvaEventObject<MouseEvent>) =>
+                tool === 'select' && selectElement(el.id, e.evt.shiftKey),
+              onTap: () => tool === 'select' && selectElement(el.id, false),
+              onDragStart: dragSync.onStart,
+              onDragMove: dragSync.onMove,
             };
 
             if (el.type === 'sticky') {
@@ -551,7 +749,9 @@ export default function Board() {
                   isSelected={isSelected}
                   onChange={updateElement}
                   hidden={editingTextId === el.id}
+                  dragSync={dragSync}
                   onDblClick={() => {
+                    selectElement(el.id, false);
                     setEditingTextId(el.id);
                     setEditingValue(el.text);
                   }}
@@ -577,10 +777,17 @@ export default function Board() {
                   rotation={el.rotation}
                   visible={editingTextId !== el.id}
                   onDblClick={() => {
+                    selectElement(el.id, false);
                     setEditingTextId(el.id);
                     setEditingValue(el.text);
                   }}
-                  onDragEnd={(e) => updateElement({ ...el, x: e.target.x(), y: e.target.y() })}
+                  onDragEnd={(e) => {
+                    if (dragSync.active) {
+                      dragSync.onEnd();
+                      return;
+                    }
+                    updateElement({ ...el, x: e.target.x(), y: e.target.y() });
+                  }}
                   onTransformEnd={(e) => {
                     const node = e.target as Konva.Text;
                     const scaleX = node.scaleX();
@@ -605,13 +812,19 @@ export default function Board() {
                   y={el.y}
                   width={el.width}
                   height={el.height}
-                  fill={el.fill}
+                  {...getFillProps(el, false)}
                   stroke={el.stroke}
                   strokeWidth={el.strokeWidth}
                   cornerRadius={el.cornerRadius ?? 0}
                   rotation={el.rotation}
                   draggable
-                  onDragEnd={(e) => updateElement({ ...el, x: e.target.x(), y: e.target.y() })}
+                  onDragEnd={(e) => {
+                    if (dragSync.active) {
+                      dragSync.onEnd();
+                      return;
+                    }
+                    updateElement({ ...el, x: e.target.x(), y: e.target.y() });
+                  }}
                   onTransformEnd={(e) => {
                     const node = e.target as Konva.Rect;
                     const scaleX = node.scaleX();
@@ -638,14 +851,18 @@ export default function Board() {
                   y={el.y + el.height / 2}
                   radiusX={el.width / 2}
                   radiusY={el.height / 2}
-                  fill={el.fill}
+                  {...getFillProps(el, true)}
                   stroke={el.stroke}
                   strokeWidth={el.strokeWidth}
                   rotation={el.rotation}
                   draggable
-                  onDragEnd={(e) =>
-                    updateElement({ ...el, x: e.target.x() - el.width / 2, y: e.target.y() - el.height / 2 })
-                  }
+                  onDragEnd={(e) => {
+                    if (dragSync.active) {
+                      dragSync.onEnd();
+                      return;
+                    }
+                    updateElement({ ...el, x: e.target.x() - el.width / 2, y: e.target.y() - el.height / 2 });
+                  }}
                   onTransformEnd={(e) => {
                     const node = e.target as Konva.Ellipse;
                     const scaleX = node.scaleX();
@@ -675,14 +892,18 @@ export default function Board() {
                   sides={3}
                   radius={el.width / 2}
                   scaleY={el.height / el.width}
-                  fill={el.fill}
+                  {...getFillProps(el, true)}
                   stroke={el.stroke}
                   strokeWidth={el.strokeWidth}
                   rotation={el.rotation}
                   draggable
-                  onDragEnd={(e) =>
-                    updateElement({ ...el, x: e.target.x() - el.width / 2, y: e.target.y() - el.height / 2 })
-                  }
+                  onDragEnd={(e) => {
+                    if (dragSync.active) {
+                      dragSync.onEnd();
+                      return;
+                    }
+                    updateElement({ ...el, x: e.target.x() - el.width / 2, y: e.target.y() - el.height / 2 });
+                  }}
                   onTransformEnd={(e) => {
                     const node = e.target as Konva.RegularPolygon;
                     const scaleX = node.scaleX();
@@ -712,14 +933,18 @@ export default function Board() {
                   sides={4}
                   radius={el.width / 2}
                   scaleY={el.height / el.width}
-                  fill={el.fill}
+                  {...getFillProps(el, true)}
                   stroke={el.stroke}
                   strokeWidth={el.strokeWidth}
                   rotation={el.rotation}
                   draggable
-                  onDragEnd={(e) =>
-                    updateElement({ ...el, x: e.target.x() - el.width / 2, y: e.target.y() - el.height / 2 })
-                  }
+                  onDragEnd={(e) => {
+                    if (dragSync.active) {
+                      dragSync.onEnd();
+                      return;
+                    }
+                    updateElement({ ...el, x: e.target.x() - el.width / 2, y: e.target.y() - el.height / 2 });
+                  }}
                   onTransformEnd={(e) => {
                     const node = e.target as Konva.RegularPolygon;
                     const scaleX = node.scaleX();
@@ -750,14 +975,18 @@ export default function Board() {
                   innerRadius={el.width / 4}
                   outerRadius={el.width / 2}
                   scaleY={el.height / el.width}
-                  fill={el.fill}
+                  {...getFillProps(el, true)}
                   stroke={el.stroke}
                   strokeWidth={el.strokeWidth}
                   rotation={el.rotation}
                   draggable
-                  onDragEnd={(e) =>
-                    updateElement({ ...el, x: e.target.x() - el.width / 2, y: e.target.y() - el.height / 2 })
-                  }
+                  onDragEnd={(e) => {
+                    if (dragSync.active) {
+                      dragSync.onEnd();
+                      return;
+                    }
+                    updateElement({ ...el, x: e.target.x() - el.width / 2, y: e.target.y() - el.height / 2 });
+                  }}
                   onTransformEnd={(e) => {
                     const node = e.target as Konva.Star;
                     const scaleX = node.scaleX();
@@ -788,6 +1017,10 @@ export default function Board() {
                   strokeWidth={el.strokeWidth}
                   draggable
                   onDragEnd={(e) => {
+                    if (dragSync.active) {
+                      dragSync.onEnd();
+                      return;
+                    }
                     const dx = e.target.x();
                     const dy = e.target.y();
                     e.target.position({ x: 0, y: 0 });
@@ -810,6 +1043,10 @@ export default function Board() {
                   lineJoin="round"
                   draggable
                   onDragEnd={(e) => {
+                    if (dragSync.active) {
+                      dragSync.onEnd();
+                      return;
+                    }
                     const dx = e.target.x();
                     const dy = e.target.y();
                     e.target.position({ x: 0, y: 0 });
@@ -822,7 +1059,16 @@ export default function Board() {
               );
             }
             if (el.type === 'image') {
-              return <CanvasImage key={el.id} el={el} isSelected={isSelected} onSelect={common.onClick} onChange={updateElement} />;
+              return (
+                <CanvasImage
+                  key={el.id}
+                  el={el}
+                  isSelected={isSelected}
+                  onSelect={common.onClick}
+                  onChange={updateElement}
+                  dragSync={dragSync}
+                />
+              );
             }
             return null;
           })}
@@ -930,57 +1176,213 @@ export default function Board() {
           );
         })()}
 
-      {selectedId &&
+      {selectedIds.length > 0 &&
         (() => {
-          const el = elements.find((e) => e.id === selectedId);
-          if (!el) return null;
-          const isShape = SHAPE_TYPES.has(el.type);
-          const isLine = el.type === 'arrow' || el.type === 'line';
-          if (!isShape && !isLine) return null;
-          const shape = el as ShapeElement;
+          const selectedEls = elements.filter((e) => selectedIds.includes(e.id));
+          if (selectedEls.length === 0) return null;
+          const isShape = selectedEls.some((e) => SHAPE_TYPES.has(e.type));
+          const isLine = selectedEls.some((e) => e.type === 'arrow' || e.type === 'line');
+          const shapeRep: any =
+            selectedEls.find((e) => SHAPE_TYPES.has(e.type)) ??
+            selectedEls.find((e) => e.type === 'arrow' || e.type === 'line');
+          const representative = selectedEls[0];
+          const allSameGroup =
+            selectedEls.length > 1 &&
+            !!representative.groupId &&
+            selectedEls.every((e) => e.groupId === representative.groupId);
+          const canGroup = selectedIds.length > 1 && !allSameGroup;
+
           return (
             <div className="board-props-panel">
-              {isShape && (
-                <label className="board-props-row">
-                  <span>Fill</span>
-                  <input
-                    type="color"
-                    value={shape.fill && shape.fill.startsWith('#') ? shape.fill : '#74C0FC'}
-                    onChange={(e) => updateElement({ ...shape, fill: e.target.value })}
-                  />
-                </label>
+              {(isShape || isLine) && shapeRep && (
+                <>
+                  {isShape && (
+                    <>
+                      <div className="board-props-row">
+                        <span>Fill</span>
+                        <div className="board-props-segmented">
+                          <button
+                            className={!shapeRep.fillGradient ? 'is-active' : ''}
+                            onClick={() => updateSelected((e) => (SHAPE_TYPES.has(e.type) ? { fillGradient: null } : {}))}
+                          >
+                            Solid
+                          </button>
+                          <button
+                            className={shapeRep.fillGradient ? 'is-active' : ''}
+                            onClick={() =>
+                              updateSelected((e) =>
+                                SHAPE_TYPES.has(e.type)
+                                  ? {
+                                      fillGradient: (e as any).fillGradient ?? {
+                                        from: (e as any).fill && (e as any).fill.startsWith('#') ? (e as any).fill : '#74C0FC',
+                                        to: '#1a1a1a',
+                                      },
+                                    }
+                                  : {}
+                              )
+                            }
+                          >
+                            Gradient
+                          </button>
+                        </div>
+                      </div>
+
+                      {!shapeRep.fillGradient ? (
+                        <label className="board-props-row">
+                          <span>Colour</span>
+                          <input
+                            type="color"
+                            value={shapeRep.fill && shapeRep.fill.startsWith('#') ? shapeRep.fill : '#74C0FC'}
+                            onChange={(e) =>
+                              updateSelected((el2) => (SHAPE_TYPES.has(el2.type) ? { fill: e.target.value } : {}))
+                            }
+                          />
+                          <button
+                            className="board-props-transparent-btn"
+                            onClick={() =>
+                              updateSelected((el2) =>
+                                SHAPE_TYPES.has(el2.type)
+                                  ? { fillOpacity: (el2 as any).fillOpacity === 0 ? 1 : 0 }
+                                  : {}
+                              )
+                            }
+                            title="Toggle transparent fill"
+                          >
+                            {shapeRep.fillOpacity === 0 ? 'Show' : 'Transparent'}
+                          </button>
+                        </label>
+                      ) : (
+                        <>
+                          <label className="board-props-row">
+                            <span>From</span>
+                            <input
+                              type="color"
+                              value={shapeRep.fillGradient.from}
+                              onChange={(e) =>
+                                updateSelected((el2) =>
+                                  SHAPE_TYPES.has(el2.type) && (el2 as any).fillGradient
+                                    ? { fillGradient: { ...(el2 as any).fillGradient, from: e.target.value } }
+                                    : {}
+                                )
+                              }
+                            />
+                          </label>
+                          <label className="board-props-row">
+                            <span>To</span>
+                            <input
+                              type="color"
+                              value={shapeRep.fillGradient.to}
+                              onChange={(e) =>
+                                updateSelected((el2) =>
+                                  SHAPE_TYPES.has(el2.type) && (el2 as any).fillGradient
+                                    ? { fillGradient: { ...(el2 as any).fillGradient, to: e.target.value } }
+                                    : {}
+                                )
+                              }
+                            />
+                          </label>
+                        </>
+                      )}
+
+                      <label className="board-props-row">
+                        <span>Opacity</span>
+                        <input
+                          type="range"
+                          min={0}
+                          max={100}
+                          value={Math.round((shapeRep.fillOpacity ?? 1) * 100)}
+                          onChange={(e) =>
+                            updateSelected((el2) =>
+                              SHAPE_TYPES.has(el2.type) ? { fillOpacity: Number(e.target.value) / 100 } : {}
+                            )
+                          }
+                        />
+                        <span className="board-props-value">{Math.round((shapeRep.fillOpacity ?? 1) * 100)}%</span>
+                      </label>
+                    </>
+                  )}
+
+                  <label className="board-props-row">
+                    <span>Outline</span>
+                    <input
+                      type="color"
+                      value={shapeRep.stroke && shapeRep.stroke.startsWith('#') ? shapeRep.stroke : '#1a1a1a'}
+                      onChange={(e) =>
+                        updateSelected((el2) =>
+                          SHAPE_TYPES.has(el2.type) || el2.type === 'arrow' || el2.type === 'line'
+                            ? { stroke: e.target.value }
+                            : {}
+                        )
+                      }
+                    />
+                  </label>
+                  <label className="board-props-row">
+                    <span>Thickness</span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={20}
+                      value={shapeRep.strokeWidth ?? 0}
+                      onChange={(e) =>
+                        updateSelected((el2) =>
+                          SHAPE_TYPES.has(el2.type) || el2.type === 'arrow' || el2.type === 'line'
+                            ? { strokeWidth: Number(e.target.value) }
+                            : {}
+                        )
+                      }
+                    />
+                    <span className="board-props-value">{shapeRep.strokeWidth ?? 0}</span>
+                  </label>
+                  {shapeRep.type === 'rect' && (
+                    <label className="board-props-row">
+                      <span>Corner radius</span>
+                      <input
+                        type="range"
+                        min={0}
+                        max={Math.floor(Math.min(shapeRep.width, shapeRep.height) / 2)}
+                        value={shapeRep.cornerRadius ?? 0}
+                        onChange={(e) =>
+                          updateSelected((el2) => (el2.type === 'rect' ? { cornerRadius: Number(e.target.value) } : {}))
+                        }
+                      />
+                      <span className="board-props-value">{shapeRep.cornerRadius ?? 0}</span>
+                    </label>
+                  )}
+                  <div className="board-props-divider" />
+                </>
               )}
-              <label className="board-props-row">
-                <span>Outline</span>
-                <input
-                  type="color"
-                  value={shape.stroke && shape.stroke.startsWith('#') ? shape.stroke : '#1a1a1a'}
-                  onChange={(e) => updateElement({ ...shape, stroke: e.target.value })}
-                />
-              </label>
-              <label className="board-props-row">
-                <span>Thickness</span>
-                <input
-                  type="range"
-                  min={0}
-                  max={20}
-                  value={shape.strokeWidth}
-                  onChange={(e) => updateElement({ ...shape, strokeWidth: Number(e.target.value) })}
-                />
-                <span className="board-props-value">{shape.strokeWidth}</span>
-              </label>
-              {el.type === 'rect' && (
-                <label className="board-props-row">
-                  <span>Corner radius</span>
-                  <input
-                    type="range"
-                    min={0}
-                    max={Math.floor(Math.min(shape.width, shape.height) / 2)}
-                    value={shape.cornerRadius ?? 0}
-                    onChange={(e) => updateElement({ ...shape, cornerRadius: Number(e.target.value) })}
-                  />
-                  <span className="board-props-value">{shape.cornerRadius ?? 0}</span>
-                </label>
+
+              <div className="board-props-row">
+                <span>Order</span>
+                <div className="board-props-btn-group">
+                  <button onClick={() => reorderSelection('back')} title="Send to back (Cmd+Shift+[)">
+                    ⇤
+                  </button>
+                  <button onClick={() => reorderSelection('backward')} title="Send backward (Cmd+[)">
+                    ←
+                  </button>
+                  <button onClick={() => reorderSelection('forward')} title="Bring forward (Cmd+])">
+                    →
+                  </button>
+                  <button onClick={() => reorderSelection('front')} title="Bring to front (Cmd+Shift+])">
+                    ⇥
+                  </button>
+                </div>
+              </div>
+
+              {(canGroup || allSameGroup) && (
+                <div className="board-props-row">
+                  <span>Group</span>
+                  {canGroup ? (
+                    <button className="board-props-action-btn" onClick={groupSelected}>
+                      Group (Cmd+G)
+                    </button>
+                  ) : (
+                    <button className="board-props-action-btn" onClick={ungroupSelected}>
+                      Ungroup (Cmd+Shift+G)
+                    </button>
+                  )}
+                </div>
               )}
             </div>
           );
@@ -989,7 +1391,7 @@ export default function Board() {
   );
 }
 
-function StickyNote({ el, isSelected, onChange, onDblClick, onClick, onTap, id, hidden }: any) {
+function StickyNote({ el, isSelected, onChange, onDblClick, onClick, onTap, id, hidden, dragSync }: any) {
   return (
     <>
       <Rect
@@ -1010,7 +1412,15 @@ function StickyNote({ el, isSelected, onChange, onDblClick, onClick, onTap, id, 
         onTap={onTap}
         onDblClick={onDblClick}
         onDblTap={onDblClick}
-        onDragEnd={(e: any) => onChange({ ...el, x: e.target.x(), y: e.target.y() })}
+        onDragStart={dragSync.onStart}
+        onDragMove={dragSync.onMove}
+        onDragEnd={(e: any) => {
+          if (dragSync.active) {
+            dragSync.onEnd();
+            return;
+          }
+          onChange({ ...el, x: e.target.x(), y: e.target.y() });
+        }}
         onTransformEnd={(e: any) => {
           const node = e.target;
           const scaleX = node.scaleX();

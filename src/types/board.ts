@@ -10,6 +10,11 @@ export type ElementType =
   | 'arrow'
   | 'line';
 
+export interface GradientFill {
+  from: string;
+  to: string;
+}
+
 export interface BaseElement {
   id: string;
   type: ElementType;
@@ -19,8 +24,11 @@ export interface BaseElement {
   height: number;
   rotation: number;
   fill: string;
+  fillOpacity?: number;
+  fillGradient?: GradientFill | null;
   stroke?: string;
   draggable: boolean;
+  groupId?: string | null;
 }
 
 export interface TextStyle {
