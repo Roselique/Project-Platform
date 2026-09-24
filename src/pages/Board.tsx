@@ -51,6 +51,7 @@ function stepFontSize(current: number, dir: 1 | -1): number {
   return next ?? FONT_SIZE_STEPS[0];
 }
 const SHAPE_TYPES = new Set(['rect', 'ellipse', 'triangle', 'diamond', 'star']);
+const TEXT_TYPES = new Set(['text', 'sticky']);
 const CENTERED_TYPES = new Set(['ellipse', 'triangle', 'diamond', 'star']);
 
 type Tool = 'select' | 'sticky' | 'text' | 'rect' | 'ellipse' | 'triangle' | 'diamond' | 'star' | 'arrow' | 'pen';
@@ -1346,6 +1347,8 @@ export default function Board() {
           if (selectedEls.length === 0) return null;
           const isShape = selectedEls.some((e) => SHAPE_TYPES.has(e.type));
           const isLine = selectedEls.some((e) => e.type === 'arrow' || e.type === 'line');
+          const isText = selectedEls.some((e) => TEXT_TYPES.has(e.type));
+          const textRep: any = selectedEls.find((e) => TEXT_TYPES.has(e.type));
           const shapeRep: any =
             selectedEls.find((e) => SHAPE_TYPES.has(e.type)) ??
             selectedEls.find((e) => e.type === 'arrow' || e.type === 'line');
@@ -1355,9 +1358,68 @@ export default function Board() {
             !!representative.groupId &&
             selectedEls.every((e) => e.groupId === representative.groupId);
           const canGroup = selectedIds.length > 1 && !allSameGroup;
+          const fontOptions = Array.from(
+            new Set([textRep?.fontFamily || 'Inter', ...(systemFonts.length ? systemFonts : FALLBACK_FONTS)])
+          );
 
           return (
             <div className="board-props-panel">
+              {isText && textRep && (
+                <>
+                  <label className="board-props-row">
+                    <span>Font</span>
+                    <select
+                      className="board-props-font-select"
+                      value={textRep.fontFamily || 'Inter'}
+                      onChange={(e) =>
+                        updateSelected((el2) => (TEXT_TYPES.has(el2.type) ? { fontFamily: e.target.value } : {}))
+                      }
+                    >
+                      {fontOptions.map((f) => (
+                        <option key={f} value={f} style={{ fontFamily: f }}>
+                          {f}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <div className="board-props-row">
+                    <span></span>
+                    <button className="board-props-action-btn" onClick={loadSystemFonts}>
+                      {fontsStatus === 'loading' ? 'Loading…' : 'Load fonts from this computer'}
+                    </button>
+                  </div>
+                  {fontsStatus === 'error' && (
+                    <p className="board-props-hint">
+                      This browser can't list installed fonts (Chrome/Edge only) — showing common fonts instead.
+                    </p>
+                  )}
+                  <label className="board-props-row">
+                    <span>Size</span>
+                    <div className="board-props-btn-group">
+                      <button
+                        onClick={() =>
+                          updateSelected((el2) =>
+                            TEXT_TYPES.has(el2.type) ? { fontSize: stepFontSize((el2 as any).fontSize, -1) } : {}
+                          )
+                        }
+                      >
+                        −
+                      </button>
+                      <span className="board-props-value">{textRep.fontSize}</span>
+                      <button
+                        onClick={() =>
+                          updateSelected((el2) =>
+                            TEXT_TYPES.has(el2.type) ? { fontSize: stepFontSize((el2 as any).fontSize, 1) } : {}
+                          )
+                        }
+                      >
+                        +
+                      </button>
+                    </div>
+                  </label>
+                  <div className="board-props-divider" />
+                </>
+              )}
               {(isShape || isLine) && shapeRep && (
                 <>
                   {isShape && (
