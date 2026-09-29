@@ -167,6 +167,7 @@
   outline: none;
   box-sizing: border-box;
   line-height: 1.3;
+  overflow-y: auto;
 }
 
 .board-editor--sticky {

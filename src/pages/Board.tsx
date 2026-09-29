@@ -164,8 +164,6 @@ export default function Board() {
   const [systemFonts, setSystemFonts] = useState<string[]>([]);
   const [fontsStatus, setFontsStatus] = useState<'idle' | 'loading' | 'error'>('idle');
 
-  const selectedId = selectedIds.length === 1 ? selectedIds[0] : null;
-
   const stageRef = useRef<Konva.Stage>(null);
   const trRef = useRef<Konva.Transformer>(null);
   const layerRef = useRef<Konva.Layer>(null);
@@ -298,7 +296,7 @@ export default function Board() {
         break;
       }
       case 'text':
-        el = { ...common, type: 'text', width: 240, height: 40, fill: 'transparent', text: 'Text', fontSize: 28, color: '#1a1a1a' };
+        el = { ...common, type: 'text', width: 240, height: 60, fill: 'transparent', text: 'Text', fontSize: 28, color: '#1a1a1a' };
         break;
       case 'rect':
         el = {
@@ -985,6 +983,8 @@ export default function Board() {
                   x={el.x}
                   y={el.y}
                   width={el.width}
+                  height={el.height}
+                  verticalAlign="top"
                   text={el.text || 'Text'}
                   fontSize={el.fontSize}
                   fontStyle={fontStyle}
@@ -1006,17 +1006,26 @@ export default function Board() {
                     }
                     updateElement({ ...el, x: e.target.x(), y: e.target.y() });
                   }}
-                  onTransformEnd={(e) => {
+                  onTransform={(e) => {
                     const node = e.target as Konva.Text;
                     const scaleX = node.scaleX();
-                    node.scaleX(1);
-                    node.scaleY(1);
+                    const scaleY = node.scaleY();
+                    node.setAttrs({
+                      width: Math.max(40, node.width() * scaleX),
+                      height: Math.max(20, node.height() * scaleY),
+                      scaleX: 1,
+                      scaleY: 1,
+                    });
+                  }}
+                  onTransformEnd={(e) => {
+                    const node = e.target as Konva.Text;
                     updateElement({
                       ...el,
                       x: node.x(),
                       y: node.y(),
                       rotation: node.rotation(),
-                      width: Math.max(40, el.width * scaleX),
+                      width: node.width(),
+                      height: node.height(),
                     });
                   }}
                 />
@@ -1287,11 +1296,6 @@ export default function Board() {
             ref={trRef}
             rotateEnabled
             flipEnabled={false}
-            enabledAnchors={
-              elements.find((e) => e.id === selectedId)?.type === 'text'
-                ? ['middle-left', 'middle-right']
-                : undefined
-            }
             boundBoxFunc={(oldBox, newBox) => (newBox.width < 20 || newBox.height < 20 ? oldBox : newBox)}
           />
         </Layer>
@@ -1397,7 +1401,7 @@ export default function Board() {
                   left: screenX,
                   top: screenY,
                   width: el.width * scale,
-                  height: (isSticky ? el.height : Math.max(el.height, 60)) * scale,
+                  height: el.height * scale,
                   fontSize: (el as any).fontSize * scale,
                   fontFamily: `'${el.fontFamily || 'Inter'}', sans-serif`,
                   fontWeight: el.bold ? 700 : 400,
@@ -1740,6 +1744,7 @@ export default function Board() {
 }
 
 function StickyNote({ el, isSelected, onChange, onDblClick, onClick, onTap, id, hidden, dragSync }: any) {
+  const textNodeRef = useRef<Konva.Text>(null);
   return (
     <>
       <Rect
@@ -1768,24 +1773,35 @@ function StickyNote({ el, isSelected, onChange, onDblClick, onClick, onTap, id, 
           }
           onChange({ ...el, x: e.target.x(), y: e.target.y() });
         }}
-        onTransformEnd={(e: any) => {
+        onTransform={(e: any) => {
           const node = e.target;
           const scaleX = node.scaleX();
           const scaleY = node.scaleY();
-          node.scaleX(1);
-          node.scaleY(1);
+          const newWidth = Math.max(60, node.width() * scaleX);
+          const newHeight = Math.max(60, node.height() * scaleY);
+          node.setAttrs({ width: newWidth, height: newHeight, scaleX: 1, scaleY: 1 });
+          textNodeRef.current?.setAttrs({
+            x: node.x() + 12,
+            y: node.y() + 12,
+            width: newWidth - 24,
+            height: newHeight - 24,
+          });
+        }}
+        onTransformEnd={(e: any) => {
+          const node = e.target;
           onChange({
             ...el,
             x: node.x(),
             y: node.y(),
             rotation: node.rotation(),
-            width: Math.max(60, node.width() * scaleX),
-            height: Math.max(60, node.height() * scaleY),
+            width: node.width(),
+            height: node.height(),
           });
         }}
       />
       {!hidden && el.text && (
         <Text
+          ref={textNodeRef}
           x={el.x + 12}
           y={el.y + 12}
           width={el.width - 24}
