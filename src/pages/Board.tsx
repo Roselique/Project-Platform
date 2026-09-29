@@ -15,7 +15,7 @@ import {
 } from 'react-konva';
 import type Konva from 'konva';
 import { useBoardsStore } from '../store/boardsStore';
-import type { BoardElement, ElementType, ImageElement, ShapeElement } from '../types/board';
+import type { BoardElement, ElementType, GradientFill, ImageElement } from '../types/board';
 import { makeId } from '../utils/id';
 import './Board.css';
 
@@ -50,11 +50,48 @@ function stepFontSize(current: number, dir: 1 | -1): number {
   const next = [...FONT_SIZE_STEPS].reverse().find((s) => s < current);
   return next ?? FONT_SIZE_STEPS[0];
 }
-const SHAPE_TYPES = new Set(['rect', 'ellipse', 'triangle', 'diamond', 'star']);
+const SHAPE_TYPES = new Set(['rect', 'ellipse', 'triangle', 'diamond', 'star', 'frame']);
 const TEXT_TYPES = new Set(['text', 'sticky']);
 const CENTERED_TYPES = new Set(['ellipse', 'triangle', 'diamond', 'star']);
 
-type Tool = 'select' | 'sticky' | 'text' | 'rect' | 'ellipse' | 'triangle' | 'diamond' | 'star' | 'arrow' | 'pen';
+type ShapeTool = 'rect' | 'ellipse' | 'triangle' | 'diamond' | 'star';
+const SHAPE_TOOLS: ShapeTool[] = ['rect', 'ellipse', 'triangle', 'diamond', 'star'];
+const SHAPE_TOOL_ICONS: Record<ShapeTool, string> = {
+  rect: '▭',
+  ellipse: '◯',
+  triangle: '▲',
+  diamond: '◆',
+  star: '★',
+};
+const SHAPE_TOOL_LABELS: Record<ShapeTool, string> = {
+  rect: 'Rectangle',
+  ellipse: 'Ellipse',
+  triangle: 'Triangle',
+  diamond: 'Diamond',
+  star: 'Star',
+};
+
+type FramePreset = 'A5' | 'A4' | 'A3' | 'freeform';
+const FRAME_PRESETS: FramePreset[] = ['A5', 'A4', 'A3', 'freeform'];
+const FRAME_SIZES: Record<FramePreset, { width: number; height: number; label: string }> = {
+  A5: { width: 420, height: 595, label: 'A5' },
+  A4: { width: 595, height: 842, label: 'A4' },
+  A3: { width: 842, height: 1191, label: 'A3' },
+  freeform: { width: 400, height: 300, label: 'Freeform' },
+};
+
+type Tool =
+  | 'select'
+  | 'sticky'
+  | 'text'
+  | 'rect'
+  | 'ellipse'
+  | 'triangle'
+  | 'diamond'
+  | 'star'
+  | 'frame'
+  | 'arrow'
+  | 'pen';
 
 function hexToRgba(hex: string | undefined, alpha: number): string {
   if (!hex || hex === 'transparent') return 'rgba(0,0,0,0)';
@@ -68,7 +105,15 @@ function hexToRgba(hex: string | undefined, alpha: number): string {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
-function getFillProps(el: ShapeElement, centered: boolean) {
+interface FillableElement {
+  fill: string;
+  fillOpacity?: number;
+  fillGradient?: GradientFill | null;
+  width: number;
+  height: number;
+}
+
+function getFillProps(el: FillableElement, centered: boolean) {
   const alpha = el.fillOpacity ?? 1;
   if (el.fillGradient) {
     const start = centered ? { x: -el.width / 2, y: -el.height / 2 } : { x: 0, y: 0 };
@@ -163,11 +208,16 @@ export default function Board() {
   const [isPanning, setIsPanning] = useState(false);
   const [systemFonts, setSystemFonts] = useState<string[]>([]);
   const [fontsStatus, setFontsStatus] = useState<'idle' | 'loading' | 'error'>('idle');
+  const [lastShapeTool, setLastShapeTool] = useState<ShapeTool>('rect');
+  const [frameSize, setFrameSize] = useState<FramePreset>('A4');
+  const [openPicker, setOpenPicker] = useState<'shape' | 'frame' | null>(null);
 
   const stageRef = useRef<Konva.Stage>(null);
   const trRef = useRef<Konva.Transformer>(null);
   const layerRef = useRef<Konva.Layer>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const shapePickerRef = useRef<HTMLDivElement>(null);
+  const framePickerRef = useRef<HTMLDivElement>(null);
   const colorIndexRef = useRef(0);
   const drawingLineRef = useRef<string | null>(null);
   const saveTimer = useRef<number | null>(null);
@@ -322,6 +372,20 @@ export default function Board() {
       case 'star':
         el = { ...common, type: 'star', width: 160, height: 160, fill: '#FFE066', stroke: '#1a1a1a', strokeWidth: 0 } as any;
         break;
+      case 'frame': {
+        const preset = FRAME_SIZES[frameSize];
+        el = {
+          ...common,
+          type: 'frame',
+          width: preset.width,
+          height: preset.height,
+          fill: '#ffffff',
+          stroke: '#94a3b8',
+          strokeWidth: 2,
+          label: preset.label,
+        } as any;
+        break;
+      }
       default:
         return;
     }
@@ -715,8 +779,13 @@ export default function Board() {
       } else if (e.key === 'v') setTool('select');
       else if (e.key === 's') setTool('sticky');
       else if (e.key === 't') setTool('text');
-      else if (e.key === 'r') setTool('rect');
-      else if (e.key === 'o') setTool('ellipse');
+      else if (e.key === 'r') {
+        setTool('rect');
+        setLastShapeTool('rect');
+      } else if (e.key === 'o') {
+        setTool('ellipse');
+        setLastShapeTool('ellipse');
+      }
       else if (e.key === 'a') setTool('arrow');
       else if (e.key === 'Escape') setSelectedIds([]);
     }
@@ -843,6 +912,18 @@ export default function Board() {
     return () => window.removeEventListener('paste', handlePaste);
   }, [placeImageFromSrc]);
 
+  useEffect(() => {
+    if (!openPicker) return;
+    function onDocMouseDown(e: MouseEvent) {
+      const target = e.target as Node;
+      if (shapePickerRef.current?.contains(target)) return;
+      if (framePickerRef.current?.contains(target)) return;
+      setOpenPicker(null);
+    }
+    document.addEventListener('mousedown', onDocMouseDown);
+    return () => document.removeEventListener('mousedown', onDocMouseDown);
+  }, [openPicker]);
+
   const cursor = useMemo(() => {
     if (tool === 'select') return isPanning ? 'grabbing' : 'default';
     return 'crosshair';
@@ -874,12 +955,6 @@ export default function Board() {
           ['select', '↖', 'Select (V)'],
           ['sticky', '▧', 'Sticky note (S)'],
           ['text', 'T', 'Text (T)'],
-          ['rect', '▭', 'Rectangle (R)'],
-          ['ellipse', '◯', 'Ellipse (O)'],
-          ['triangle', '▲', 'Triangle'],
-          ['diamond', '◆', 'Diamond'],
-          ['star', '★', 'Star'],
-          ['arrow', '↗', 'Arrow (A)'],
         ] as [Tool, string, string][]).map(([t, icon, label]) => (
           <button
             key={t}
@@ -890,6 +965,83 @@ export default function Board() {
             {icon}
           </button>
         ))}
+
+        <div className="board-toolbar__picker-wrap" ref={shapePickerRef}>
+          <button
+            className={`board-toolbar__btn ${SHAPE_TOOLS.includes(tool as ShapeTool) ? 'is-active' : ''}`}
+            onClick={() => setOpenPicker((p) => (p === 'shape' ? null : 'shape'))}
+            title="Shapes"
+          >
+            {SHAPE_TOOL_ICONS[lastShapeTool]}
+          </button>
+          {openPicker === 'shape' && (
+            <div
+              className="board-toolbar__popover"
+              style={(() => {
+                const rect = shapePickerRef.current?.getBoundingClientRect();
+                return rect ? { top: rect.top, left: rect.right + 10 } : undefined;
+              })()}
+            >
+              {SHAPE_TOOLS.map((s) => (
+                <button
+                  key={s}
+                  className={`board-toolbar__popover-btn ${tool === s ? 'is-active' : ''}`}
+                  onClick={() => {
+                    setTool(s);
+                    setLastShapeTool(s);
+                    setOpenPicker(null);
+                  }}
+                >
+                  <span className="board-toolbar__popover-icon">{SHAPE_TOOL_ICONS[s]}</span>
+                  <span>{SHAPE_TOOL_LABELS[s]}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="board-toolbar__picker-wrap" ref={framePickerRef}>
+          <button
+            className={`board-toolbar__btn ${tool === 'frame' ? 'is-active' : ''}`}
+            onClick={() => setOpenPicker((p) => (p === 'frame' ? null : 'frame'))}
+            title="Frame"
+          >
+            ▦
+          </button>
+          {openPicker === 'frame' && (
+            <div
+              className="board-toolbar__popover"
+              style={(() => {
+                const rect = framePickerRef.current?.getBoundingClientRect();
+                return rect ? { top: rect.top, left: rect.right + 10 } : undefined;
+              })()}
+            >
+              {FRAME_PRESETS.map((p) => (
+                <button
+                  key={p}
+                  className={`board-toolbar__popover-btn ${tool === 'frame' && frameSize === p ? 'is-active' : ''}`}
+                  onClick={() => {
+                    setFrameSize(p);
+                    setTool('frame');
+                    setOpenPicker(null);
+                  }}
+                >
+                  <span className="board-toolbar__popover-icon">▦</span>
+                  <span>{FRAME_SIZES[p].label}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <button
+          className={`board-toolbar__btn ${tool === 'arrow' ? 'is-active' : ''}`}
+          onClick={() => setTool('arrow')}
+          title="Arrow (A)"
+        >
+          ↗
+        </button>
+
         <div className="board-toolbar__divider" />
         <button className="board-toolbar__btn" onClick={() => fileInputRef.current?.click()} title="Upload image">
           🖼
@@ -1275,6 +1427,19 @@ export default function Board() {
                       points: [el.points[0] + dx, el.points[1] + dy, el.points[2] + dx, el.points[3] + dy],
                     });
                   }}
+                />
+              );
+            }
+            if (el.type === 'frame') {
+              return (
+                <Frame
+                  key={el.id}
+                  id={el.id}
+                  el={el}
+                  onChange={updateElement}
+                  onClick={common.onClick}
+                  onTap={common.onTap}
+                  dragSync={dragSync}
                 />
               );
             }
@@ -1740,6 +1905,67 @@ export default function Board() {
           );
         })()}
     </div>
+  );
+}
+
+function Frame({ el, onChange, onClick, onTap, id, dragSync }: any) {
+  return (
+    <>
+      <Rect
+        id={id}
+        x={el.x}
+        y={el.y}
+        width={el.width}
+        height={el.height}
+        {...getFillProps(el, false)}
+        stroke={el.stroke}
+        strokeWidth={el.strokeWidth}
+        rotation={el.rotation}
+        draggable
+        onClick={onClick}
+        onTap={onTap}
+        onDragStart={dragSync.onStart}
+        onDragMove={dragSync.onMove}
+        onDragEnd={(e: any) => {
+          if (dragSync.onEnd()) {
+            return;
+          }
+          onChange({ ...el, x: e.target.x(), y: e.target.y() });
+        }}
+        onTransform={(e: any) => {
+          const node = e.target;
+          const scaleX = node.scaleX();
+          const scaleY = node.scaleY();
+          node.setAttrs({
+            width: Math.max(40, node.width() * scaleX),
+            height: Math.max(40, node.height() * scaleY),
+            scaleX: 1,
+            scaleY: 1,
+          });
+        }}
+        onTransformEnd={(e: any) => {
+          const node = e.target;
+          onChange({
+            ...el,
+            x: node.x(),
+            y: node.y(),
+            rotation: node.rotation(),
+            width: node.width(),
+            height: node.height(),
+          });
+        }}
+      />
+      <Text
+        x={el.x}
+        y={el.y - 22}
+        text={el.label || 'Frame'}
+        fontSize={13}
+        fontFamily="'Inter', sans-serif"
+        fill="#64748b"
+        rotation={el.rotation}
+        listening={false}
+      />
+    </>
   );
 }
 

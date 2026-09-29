@@ -6,6 +6,7 @@ export type ElementType =
   | 'triangle'
   | 'diamond'
   | 'star'
+  | 'frame'
   | 'image'
   | 'arrow'
   | 'line';
@@ -57,6 +58,12 @@ export interface ShapeElement extends BaseElement {
   cornerRadius?: number;
 }
 
+export interface FrameElement extends BaseElement {
+  type: 'frame';
+  strokeWidth: number;
+  label: string;
+}
+
 export interface ImageElement extends BaseElement {
   type: 'image';
   src: string;
@@ -68,7 +75,7 @@ export interface LineElement extends BaseElement {
   strokeWidth: number;
 }
 
-export type BoardElement = StickyElement | TextElement | ShapeElement | ImageElement | LineElement;
+export type BoardElement = StickyElement | TextElement | ShapeElement | FrameElement | ImageElement | LineElement;
 
 export interface Board {
   id: string;
