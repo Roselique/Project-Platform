@@ -328,14 +328,6 @@ export default function Board() {
     return { x: (x - pos.x) / scale, y: (y - pos.y) / scale };
   }
 
-  function popoverStyle(ref: React.RefObject<HTMLElement | null>, itemCount: number): React.CSSProperties | undefined {
-    const rect = ref.current?.getBoundingClientRect();
-    if (!rect) return undefined;
-    const estimatedHeight = itemCount * 38 + 12;
-    const top = Math.min(Math.max(12, rect.top), window.innerHeight - estimatedHeight - 12);
-    return { top, left: rect.right + 10 };
-  }
-
   function addElement(type: ElementType, worldPos: { x: number; y: number }) {
     const idNew = makeId(8);
     let el: BoardElement;
@@ -1013,7 +1005,7 @@ export default function Board() {
             {SHAPE_TOOL_ICONS[lastShapeTool]}
           </button>
           {openPicker === 'shape' && (
-            <div className="board-toolbar__popover" style={popoverStyle(shapePickerRef, SHAPE_TOOLS.length)}>
+            <div className="board-toolbar__popover">
               {SHAPE_TOOLS.map((s) => (
                 <button
                   key={s}
@@ -1041,7 +1033,7 @@ export default function Board() {
             ▦
           </button>
           {openPicker === 'frame' && (
-            <div className="board-toolbar__popover" style={popoverStyle(framePickerRef, FRAME_PRESETS.length)}>
+            <div className="board-toolbar__popover">
               {FRAME_PRESETS.map((p) => (
                 <button
                   key={p}
