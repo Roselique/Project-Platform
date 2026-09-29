@@ -328,6 +328,14 @@ export default function Board() {
     return { x: (x - pos.x) / scale, y: (y - pos.y) / scale };
   }
 
+  function popoverStyle(ref: React.RefObject<HTMLElement | null>, itemCount: number): React.CSSProperties | undefined {
+    const rect = ref.current?.getBoundingClientRect();
+    if (!rect) return undefined;
+    const estimatedHeight = itemCount * 38 + 12;
+    const top = Math.min(Math.max(12, rect.top), window.innerHeight - estimatedHeight - 12);
+    return { top, left: rect.right + 10 };
+  }
+
   function addElement(type: ElementType, worldPos: { x: number; y: number }) {
     const idNew = makeId(8);
     let el: BoardElement;
@@ -943,6 +951,36 @@ export default function Board() {
           onKeyDown={(e) => (e.key === 'Enter' ? (e.target as HTMLInputElement).blur() : null)}
         />
         <div className="board-topbar__spacer" />
+        <div className="board-actionbar">
+          <button className="board-icon-btn" onClick={() => fileInputRef.current?.click()} title="Upload image">
+            🖼
+          </button>
+          <input ref={fileInputRef} type="file" accept="image/*" hidden onChange={handleImageUpload} />
+          <div className="board-actionbar__divider" />
+          <button className="board-icon-btn" onClick={undo} title="Undo (Cmd+Z)">
+            ↺
+          </button>
+          <button className="board-icon-btn" onClick={redo} title="Redo (Cmd+Shift+Z)">
+            ↻
+          </button>
+          <div className="board-actionbar__divider" />
+          <button
+            className="board-icon-btn"
+            onClick={duplicateSelected}
+            disabled={selectedIds.length === 0}
+            title="Duplicate (Cmd+D, or hold Alt and drag)"
+          >
+            ⧉
+          </button>
+          <button
+            className="board-icon-btn"
+            onClick={deleteSelected}
+            disabled={selectedIds.length === 0}
+            title="Delete"
+          >
+            🗑
+          </button>
+        </div>
         <div className="board-zoom">
           <button onClick={() => zoomBy(0.85)}>−</button>
           <span>{Math.round(scale * 100)}%</span>
@@ -975,13 +1013,7 @@ export default function Board() {
             {SHAPE_TOOL_ICONS[lastShapeTool]}
           </button>
           {openPicker === 'shape' && (
-            <div
-              className="board-toolbar__popover"
-              style={(() => {
-                const rect = shapePickerRef.current?.getBoundingClientRect();
-                return rect ? { top: rect.top, left: rect.right + 10 } : undefined;
-              })()}
-            >
+            <div className="board-toolbar__popover" style={popoverStyle(shapePickerRef, SHAPE_TOOLS.length)}>
               {SHAPE_TOOLS.map((s) => (
                 <button
                   key={s}
@@ -1009,13 +1041,7 @@ export default function Board() {
             ▦
           </button>
           {openPicker === 'frame' && (
-            <div
-              className="board-toolbar__popover"
-              style={(() => {
-                const rect = framePickerRef.current?.getBoundingClientRect();
-                return rect ? { top: rect.top, left: rect.right + 10 } : undefined;
-              })()}
-            >
+            <div className="board-toolbar__popover" style={popoverStyle(framePickerRef, FRAME_PRESETS.length)}>
               {FRAME_PRESETS.map((p) => (
                 <button
                   key={p}
@@ -1040,31 +1066,6 @@ export default function Board() {
           title="Arrow (A)"
         >
           ↗
-        </button>
-
-        <div className="board-toolbar__divider" />
-        <button className="board-toolbar__btn" onClick={() => fileInputRef.current?.click()} title="Upload image">
-          🖼
-        </button>
-        <input ref={fileInputRef} type="file" accept="image/*" hidden onChange={handleImageUpload} />
-        <div className="board-toolbar__divider" />
-        <button className="board-toolbar__btn" onClick={undo} title="Undo (Cmd+Z)">
-          ↺
-        </button>
-        <button className="board-toolbar__btn" onClick={redo} title="Redo (Cmd+Shift+Z)">
-          ↻
-        </button>
-        <div className="board-toolbar__divider" />
-        <button
-          className="board-toolbar__btn"
-          onClick={duplicateSelected}
-          disabled={selectedIds.length === 0}
-          title="Duplicate (Cmd+D, or hold Alt and drag)"
-        >
-          ⧉
-        </button>
-        <button className="board-toolbar__btn" onClick={deleteSelected} disabled={selectedIds.length === 0} title="Delete">
-          🗑
         </button>
       </div>
 
