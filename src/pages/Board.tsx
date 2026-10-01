@@ -1788,7 +1788,15 @@ export default function Board() {
           const editorX = (el.x + editorInset) * scale + pos.x;
           const editorY = (el.y + editorInset) * scale + pos.y;
           const editorWidth = (el.width - editorInset * 2) * scale;
-          const editorHeight = (el.height - editorInset * 2) * scale;
+          const innerWidth = el.width - editorInset * 2;
+          const contentHeight = richTextHeight(
+            editingValue,
+            editingFormatting,
+            (el as any).fontSize,
+            el.fontFamily || 'Inter',
+            innerWidth
+          );
+          const editorHeight = Math.max(el.height - editorInset * 2, contentHeight) * scale;
 
           function toggleStyle(key: 'bold' | 'italic' | 'underline') {
             if (!el) return;
