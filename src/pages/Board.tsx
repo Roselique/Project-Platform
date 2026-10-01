@@ -1406,14 +1406,15 @@ export default function Board() {
               onDragMove: dragSync.onMove,
             };
 
+            const isBeingEdited = editingTextId === el.id;
+
             if (el.type === 'sticky') {
               return (
                 <StickyNote
                   {...common}
-                  el={el}
+                  el={isBeingEdited ? { ...el, text: editingValue, formatting: editingFormatting } : el}
                   isSelected={isSelected}
                   onChange={updateElement}
-                  hidden={editingTextId === el.id}
                   dragSync={dragSync}
                   onDblClick={() => {
                     selectElement(el.id, false);
@@ -1432,14 +1433,13 @@ export default function Board() {
                   y={el.y}
                   width={el.width}
                   height={el.height}
-                  text={el.text || 'Text'}
-                  formatting={el.formatting}
+                  text={(isBeingEdited ? editingValue : el.text) || 'Text'}
+                  formatting={isBeingEdited ? editingFormatting : el.formatting}
                   fontSize={el.fontSize}
                   color={el.color}
                   fontFamily={el.fontFamily || 'Inter'}
                   draggable
                   rotation={el.rotation}
-                  visible={editingTextId !== el.id}
                   onDblClick={() => {
                     selectElement(el.id, false);
                     setEditingTextId(el.id);
@@ -1782,6 +1782,11 @@ export default function Board() {
           const screenX = el.x * scale + pos.x;
           const screenY = el.y * scale + pos.y;
           const isSticky = el.type === 'sticky';
+          const editorInset = isSticky ? 12 : 0;
+          const editorX = (el.x + editorInset) * scale + pos.x;
+          const editorY = (el.y + editorInset) * scale + pos.y;
+          const editorWidth = (el.width - editorInset * 2) * scale;
+          const editorHeight = (el.height - editorInset * 2) * scale;
 
           function toggleStyle(key: 'bold' | 'italic' | 'underline') {
             if (!el) return;
@@ -1896,14 +1901,16 @@ export default function Board() {
                 ref={editTextareaRef}
                 className={isSticky ? 'board-editor board-editor--sticky' : 'board-editor'}
                 style={{
-                  left: screenX,
-                  top: screenY,
-                  width: el.width * scale,
-                  height: el.height * scale,
+                  left: editorX,
+                  top: editorY,
+                  width: editorWidth,
+                  height: editorHeight,
                   fontSize: (el as any).fontSize * scale,
                   fontFamily: `'${el.fontFamily || 'Inter'}', sans-serif`,
-                  background: isSticky ? (el as any).fill : 'transparent',
-                  color: isSticky ? '#1a1a1a' : (el as any).color,
+                  lineHeight: 1.3,
+                  background: 'transparent',
+                  color: 'transparent',
+                  caretColor: isSticky ? '#1a1a1a' : (el as any).color,
                 }}
                 value={editingValue}
                 onChange={(e) => {
@@ -2306,7 +2313,7 @@ function Frame({ el, onChange, onClick, onTap, id, dragSync }: any) {
   );
 }
 
-function StickyNote({ el, isSelected, onChange, onDblClick, onClick, onTap, id, hidden, dragSync }: any) {
+function StickyNote({ el, isSelected, onChange, onDblClick, onClick, onTap, id, dragSync }: any) {
   const textNodeRef = useRef<Konva.Shape>(null);
   return (
     <>
@@ -2362,7 +2369,7 @@ function StickyNote({ el, isSelected, onChange, onDblClick, onClick, onTap, id, 
           });
         }}
       />
-      {!hidden && el.text && (
+      {el.text && (
         <RichText
           ref={textNodeRef}
           x={el.x + 12}
