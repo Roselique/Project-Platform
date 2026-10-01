@@ -133,6 +133,23 @@ function getFillProps(el: FillableElement, centered: boolean) {
   return { fill: hexToRgba(el.fill, alpha) };
 }
 
+type Bounds = { x: number; y: number; width: number; height: number };
+
+function getElementBounds(el: BoardElement): Bounds {
+  if (el.type === 'arrow' || el.type === 'line') {
+    const xs = [el.points[0], el.points[2]];
+    const ys = [el.points[1], el.points[3]];
+    const minX = Math.min(...xs);
+    const minY = Math.min(...ys);
+    return { x: minX, y: minY, width: Math.max(...xs) - minX, height: Math.max(...ys) - minY };
+  }
+  return { x: el.x, y: el.y, width: el.width, height: el.height };
+}
+
+function rectsIntersect(a: Bounds, b: Bounds): boolean {
+  return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
+}
+
 function useImageEl(src: string): HTMLImageElement | undefined {
   const [img, setImg] = useState<HTMLImageElement>();
   useEffect(() => {
@@ -220,6 +237,8 @@ export default function Board() {
   const framePickerRef = useRef<HTMLDivElement>(null);
   const colorIndexRef = useRef(0);
   const drawingLineRef = useRef<string | null>(null);
+  const marqueeStartRef = useRef<{ x: number; y: number } | null>(null);
+  const [marquee, setMarquee] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const saveTimer = useRef<number | null>(null);
   const pastRef = useRef<BoardElement[][]>([]);
   const futureRef = useRef<BoardElement[][]>([]);
@@ -615,6 +634,17 @@ export default function Board() {
 
     if (tool === 'select') {
       if (clickedOnEmpty) {
+        const nativeEvt = e.evt as MouseEvent;
+        if (nativeEvt.shiftKey) {
+          stage.draggable(false);
+          const pointer = stage.getPointerPosition();
+          if (pointer) {
+            const world = screenToWorld(pointer.x, pointer.y);
+            marqueeStartRef.current = world;
+            setMarquee({ x: world.x, y: world.y, width: 0, height: 0 });
+          }
+          return;
+        }
         setSelectedIds([]);
         setIsPanning(true);
       }
@@ -652,6 +682,19 @@ export default function Board() {
   function handleStageMouseMove() {
     const stage = stageRef.current;
     if (!stage) return;
+    if (marqueeStartRef.current) {
+      const pointer = stage.getPointerPosition();
+      if (!pointer) return;
+      const world = screenToWorld(pointer.x, pointer.y);
+      const start = marqueeStartRef.current;
+      setMarquee({
+        x: Math.min(start.x, world.x),
+        y: Math.min(start.y, world.y),
+        width: Math.abs(world.x - start.x),
+        height: Math.abs(world.y - start.y),
+      });
+      return;
+    }
     if (drawingLineRef.current) {
       const pointer = stage.getPointerPosition();
       if (!pointer) return;
@@ -669,6 +712,20 @@ export default function Board() {
   }
 
   function handleStageMouseUp() {
+    if (marqueeStartRef.current) {
+      const stage = stageRef.current;
+      if (stage) stage.draggable(tool === 'select');
+      const box = marquee;
+      marqueeStartRef.current = null;
+      setMarquee(null);
+      if (box && (box.width > 2 || box.height > 2)) {
+        const ids = elementsRef.current
+          .filter((el) => rectsIntersect(box, getElementBounds(el)))
+          .map((el) => el.id);
+        setSelectedIds(ids);
+      }
+      return;
+    }
     if (drawingLineRef.current) {
       drawingLineRef.current = null;
       setTool('select');
@@ -1069,7 +1126,7 @@ export default function Board() {
         y={pos.y}
         scaleX={scale}
         scaleY={scale}
-        draggable={tool === 'select'}
+        draggable={tool === 'select' && !marquee}
         onDragEnd={(e) => {
           if (e.target === stageRef.current) setPos({ x: e.target.x(), y: e.target.y() });
         }}
@@ -1456,6 +1513,19 @@ export default function Board() {
             flipEnabled={false}
             boundBoxFunc={(oldBox, newBox) => (newBox.width < 20 || newBox.height < 20 ? oldBox : newBox)}
           />
+          {marquee && (
+            <Rect
+              x={marquee.x}
+              y={marquee.y}
+              width={marquee.width}
+              height={marquee.height}
+              fill="rgba(255,122,89,0.12)"
+              stroke="#ff7a59"
+              strokeWidth={1.5 / scale}
+              dash={[6 / scale, 4 / scale]}
+              listening={false}
+            />
+          )}
         </Layer>
       </Stage>
 
