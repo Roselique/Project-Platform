@@ -1412,7 +1412,8 @@ export default function Board() {
               return (
                 <StickyNote
                   {...common}
-                  el={isBeingEdited ? { ...el, text: editingValue, formatting: editingFormatting } : el}
+                  el={el}
+                  hidden={isBeingEdited}
                   isSelected={isSelected}
                   onChange={updateElement}
                   dragSync={dragSync}
@@ -1433,13 +1434,14 @@ export default function Board() {
                   y={el.y}
                   width={el.width}
                   height={el.height}
-                  text={(isBeingEdited ? editingValue : el.text) || 'Text'}
-                  formatting={isBeingEdited ? editingFormatting : el.formatting}
+                  text={el.text || 'Text'}
+                  formatting={el.formatting}
                   fontSize={el.fontSize}
                   color={el.color}
                   fontFamily={el.fontFamily || 'Inter'}
                   draggable
                   rotation={el.rotation}
+                  visible={!isBeingEdited}
                   onDblClick={() => {
                     selectElement(el.id, false);
                     setEditingTextId(el.id);
@@ -1898,6 +1900,7 @@ export default function Board() {
               </div>
               <textarea
                 autoFocus
+                spellCheck={false}
                 ref={editTextareaRef}
                 className={isSticky ? 'board-editor board-editor--sticky' : 'board-editor'}
                 style={{
@@ -1908,9 +1911,8 @@ export default function Board() {
                   fontSize: (el as any).fontSize * scale,
                   fontFamily: `'${el.fontFamily || 'Inter'}', sans-serif`,
                   lineHeight: 1.3,
-                  background: 'transparent',
-                  color: 'transparent',
-                  caretColor: isSticky ? '#1a1a1a' : (el as any).color,
+                  background: isSticky ? (el as any).fill : 'transparent',
+                  color: isSticky ? '#1a1a1a' : (el as any).color,
                 }}
                 value={editingValue}
                 onChange={(e) => {
@@ -2313,7 +2315,7 @@ function Frame({ el, onChange, onClick, onTap, id, dragSync }: any) {
   );
 }
 
-function StickyNote({ el, isSelected, onChange, onDblClick, onClick, onTap, id, dragSync }: any) {
+function StickyNote({ el, isSelected, onChange, onDblClick, onClick, onTap, id, hidden, dragSync }: any) {
   const textNodeRef = useRef<Konva.Shape>(null);
   return (
     <>
@@ -2369,7 +2371,7 @@ function StickyNote({ el, isSelected, onChange, onDblClick, onClick, onTap, id, 
           });
         }}
       />
-      {el.text && (
+      {!hidden && el.text && (
         <RichText
           ref={textNodeRef}
           x={el.x + 12}
