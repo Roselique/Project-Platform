@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { forwardRef, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   Stage,
@@ -8,6 +8,7 @@ import {
   RegularPolygon,
   Star,
   Text,
+  Shape,
   Arrow,
   Line,
   Transformer,
@@ -15,7 +16,7 @@ import {
 } from 'react-konva';
 import type Konva from 'konva';
 import { useBoardsStore } from '../store/boardsStore';
-import type { BoardElement, ElementType, GradientFill, ImageElement } from '../types/board';
+import type { BoardElement, CharFormat, ElementType, GradientFill, ImageElement } from '../types/board';
 import { makeId } from '../utils/id';
 import './Board.css';
 
@@ -150,6 +151,247 @@ function rectsIntersect(a: Bounds, b: Bounds): boolean {
   return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
 }
 
+// --- Rich text (per-character bold/italic/underline) layout + drawing ---
+
+let measureCanvas: HTMLCanvasElement | null = null;
+function getMeasureCtx(): CanvasRenderingContext2D {
+  if (!measureCanvas) measureCanvas = document.createElement('canvas');
+  return measureCanvas.getContext('2d')!;
+}
+
+function styleAt(formatting: CharFormat[] | undefined, i: number): CharFormat {
+  return formatting?.[i] ?? {};
+}
+
+function sameStyle(a: CharFormat, b: CharFormat): boolean {
+  return !!a.bold === !!b.bold && !!a.italic === !!b.italic && !!a.underline === !!b.underline;
+}
+
+function fontString(style: CharFormat, fontSize: number, fontFamily: string): string {
+  const parts: string[] = [];
+  if (style.italic) parts.push('italic');
+  if (style.bold) parts.push('bold');
+  parts.push(`${fontSize}px`);
+  parts.push(`'${fontFamily}', sans-serif`);
+  return parts.join(' ');
+}
+
+interface Token {
+  text: string;
+  start: number;
+}
+
+function tokenizeWithIndices(text: string): Token[] {
+  const tokens: Token[] = [];
+  let i = 0;
+  while (i < text.length) {
+    if (text[i] === '\n') {
+      tokens.push({ text: '\n', start: i });
+      i++;
+      continue;
+    }
+    const start = i;
+    const isSpace = /\s/.test(text[i]);
+    while (i < text.length && text[i] !== '\n' && /\s/.test(text[i]) === isSpace) i++;
+    tokens.push({ text: text.slice(start, i), start });
+  }
+  return tokens;
+}
+
+/** Measures (or draws, if ctx+cursor given) a token split into same-style runs. Returns total width. */
+function walkTokenRuns(
+  measureCtx: CanvasRenderingContext2D,
+  token: Token,
+  formatting: CharFormat[] | undefined,
+  fontSize: number,
+  fontFamily: string,
+  draw?: { ctx: Konva.Context; x: number; y: number; color: string }
+): number {
+  let width = 0;
+  let runStart = 0;
+  for (let i = 1; i <= token.text.length; i++) {
+    const prevStyle = styleAt(formatting, token.start + i - 1);
+    const curStyle = i < token.text.length ? styleAt(formatting, token.start + i) : null;
+    if (!curStyle || !sameStyle(curStyle, prevStyle)) {
+      const runText = token.text.slice(runStart, i);
+      const font = fontString(prevStyle, fontSize, fontFamily);
+      measureCtx.font = font;
+      const runWidth = measureCtx.measureText(runText).width;
+      if (draw) {
+        draw.ctx.font = font;
+        draw.ctx.fillStyle = draw.color;
+        draw.ctx.textBaseline = 'top';
+        draw.ctx.fillText(runText, draw.x + width, draw.y);
+        if (prevStyle.underline) {
+          draw.ctx.fillRect(draw.x + width, draw.y + fontSize * 1.05, runWidth, Math.max(1, Math.round(fontSize * 0.06)));
+        }
+      }
+      width += runWidth;
+      runStart = i;
+    }
+  }
+  return width;
+}
+
+interface Line {
+  tokens: Token[];
+}
+
+function layoutLines(
+  tokens: Token[],
+  formatting: CharFormat[] | undefined,
+  fontSize: number,
+  fontFamily: string,
+  maxWidth: number,
+  measureCtx: CanvasRenderingContext2D
+): Line[] {
+  const lines: Line[] = [];
+  let current: Token[] = [];
+  let currentWidth = 0;
+  for (const token of tokens) {
+    if (token.text === '\n') {
+      lines.push({ tokens: current });
+      current = [];
+      currentWidth = 0;
+      continue;
+    }
+    const w = walkTokenRuns(measureCtx, token, formatting, fontSize, fontFamily);
+    if (currentWidth + w > maxWidth && current.length > 0 && token.text.trim() !== '') {
+      lines.push({ tokens: current });
+      current = [];
+      currentWidth = 0;
+    }
+    current.push(token);
+    currentWidth += w;
+  }
+  lines.push({ tokens: current });
+  return lines;
+}
+
+function richTextHeight(
+  text: string,
+  formatting: CharFormat[] | undefined,
+  fontSize: number,
+  fontFamily: string,
+  width: number
+): number {
+  const measureCtx = getMeasureCtx();
+  const tokens = tokenizeWithIndices(text || '');
+  const lines = layoutLines(tokens, formatting, fontSize, fontFamily, width, measureCtx);
+  return lines.length * fontSize * 1.3;
+}
+
+/** Keeps a per-character formatting array aligned with a text edit (typing, pasting, deleting). */
+function spliceFormatting(formatting: CharFormat[], oldText: string, newText: string): CharFormat[] {
+  let prefix = 0;
+  while (prefix < oldText.length && prefix < newText.length && oldText[prefix] === newText[prefix]) prefix++;
+  let oldSuffix = oldText.length;
+  let newSuffix = newText.length;
+  while (oldSuffix > prefix && newSuffix > prefix && oldText[oldSuffix - 1] === newText[newSuffix - 1]) {
+    oldSuffix--;
+    newSuffix--;
+  }
+  const removedCount = oldSuffix - prefix;
+  const insertedCount = newSuffix - prefix;
+  const next = [...formatting];
+  while (next.length < oldText.length) next.push({});
+  const inherit = prefix > 0 ? next[prefix - 1] : {};
+  next.splice(prefix, removedCount, ...Array.from({ length: insertedCount }, () => ({ ...inherit })));
+  return next;
+}
+
+/** Toggles bold/italic/underline over [start, end); toggles the whole text when start === end. */
+function toggleRangeFormatting(
+  formatting: CharFormat[] | undefined,
+  text: string,
+  key: keyof CharFormat,
+  start: number,
+  end: number
+): CharFormat[] {
+  const next = formatting ? [...formatting] : [];
+  while (next.length < text.length) next.push({});
+  const rangeStart = start === end ? 0 : Math.min(start, end);
+  const rangeEnd = start === end ? text.length : Math.max(start, end);
+  let allOn = rangeEnd > rangeStart;
+  for (let i = rangeStart; i < rangeEnd; i++) {
+    if (!next[i]?.[key]) {
+      allOn = false;
+      break;
+    }
+  }
+  const newVal = !allOn;
+  for (let i = rangeStart; i < rangeEnd; i++) {
+    next[i] = { ...next[i], [key]: newVal };
+  }
+  return next;
+}
+
+interface RichTextProps {
+  id?: string;
+  x: number;
+  y: number;
+  width: number;
+  height?: number;
+  rotation?: number;
+  text: string;
+  formatting?: CharFormat[];
+  fontSize: number;
+  fontFamily: string;
+  color: string;
+  draggable?: boolean;
+  visible?: boolean;
+  listening?: boolean;
+  onClick?: (e: Konva.KonvaEventObject<MouseEvent>) => void;
+  onTap?: (e: Konva.KonvaEventObject<Event>) => void;
+  onDblClick?: () => void;
+  onDblTap?: () => void;
+  onDragStart?: (e: Konva.KonvaEventObject<DragEvent>) => void;
+  onDragMove?: (e: Konva.KonvaEventObject<DragEvent>) => void;
+  onDragEnd?: (e: Konva.KonvaEventObject<DragEvent>) => void;
+  onTransform?: (e: Konva.KonvaEventObject<Event>) => void;
+  onTransformEnd?: (e: Konva.KonvaEventObject<Event>) => void;
+}
+
+const RichText = forwardRef<Konva.Shape, RichTextProps>(function RichText(props, ref) {
+  const { text, formatting, fontSize, fontFamily, color, width, height, ...rest } = props;
+  const measuredHeight = Math.max(height ?? 0, richTextHeight(text, formatting, fontSize, fontFamily, width));
+  return (
+    <Shape
+      {...rest}
+      ref={ref}
+      fill="#000"
+      width={width}
+      height={measuredHeight}
+      sceneFunc={(ctx) => {
+        const measureCtx = getMeasureCtx();
+        const tokens = tokenizeWithIndices(text || '');
+        const lines = layoutLines(tokens, formatting, fontSize, fontFamily, width, measureCtx);
+        const lineHeight = fontSize * 1.3;
+        let cursorY = 0;
+        for (const line of lines) {
+          let cursorX = 0;
+          for (const token of line.tokens) {
+            const w = walkTokenRuns(measureCtx, token, formatting, fontSize, fontFamily, {
+              ctx,
+              x: cursorX,
+              y: cursorY,
+              color,
+            });
+            cursorX += w;
+          }
+          cursorY += lineHeight;
+        }
+      }}
+      hitFunc={(ctx, shape) => {
+        ctx.beginPath();
+        ctx.rect(0, 0, width, shape.height());
+        ctx.closePath();
+        ctx.fillStrokeShape(shape);
+      }}
+    />
+  );
+});
+
 function useImageEl(src: string): HTMLImageElement | undefined {
   const [img, setImg] = useState<HTMLImageElement>();
   useEffect(() => {
@@ -221,6 +463,8 @@ export default function Board() {
   const [pos, setPos] = useState({ x: board?.camera.x ?? 0, y: board?.camera.y ?? 0 });
   const [editingTextId, setEditingTextId] = useState<string | null>(null);
   const [editingValue, setEditingValue] = useState('');
+  const [editingFormatting, setEditingFormatting] = useState<CharFormat[]>([]);
+  const [, bumpSelectionTick] = useState(0);
   const [nameValue, setNameValue] = useState(board?.name ?? '');
   const [isPanning, setIsPanning] = useState(false);
   const [systemFonts, setSystemFonts] = useState<string[]>([]);
@@ -234,6 +478,7 @@ export default function Board() {
   const layerRef = useRef<Konva.Layer>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const shapePickerRef = useRef<HTMLDivElement>(null);
+  const editTextareaRef = useRef<HTMLTextAreaElement>(null);
   const framePickerRef = useRef<HTMLDivElement>(null);
   const colorIndexRef = useRef(0);
   const drawingLineRef = useRef<string | null>(null);
@@ -414,6 +659,7 @@ export default function Board() {
     if (type === 'sticky' || type === 'text') {
       setEditingTextId(idNew);
       setEditingValue(type === 'text' ? 'Text' : '');
+      setEditingFormatting([]);
     }
   }
 
@@ -1173,27 +1419,24 @@ export default function Board() {
                     selectElement(el.id, false);
                     setEditingTextId(el.id);
                     setEditingValue(el.text);
+                    setEditingFormatting(el.formatting ? [...el.formatting] : []);
                   }}
                 />
               );
             }
             if (el.type === 'text') {
-              const fontStyle = [el.bold ? 'bold' : '', el.italic ? 'italic' : ''].filter(Boolean).join(' ') || 'normal';
               return (
-                <Text
+                <RichText
                   {...common}
                   x={el.x}
                   y={el.y}
                   width={el.width}
                   height={el.height}
-                  verticalAlign="top"
                   text={el.text || 'Text'}
+                  formatting={el.formatting}
                   fontSize={el.fontSize}
-                  fontStyle={fontStyle}
-                  textDecoration={el.underline ? 'underline' : ''}
-                  fill={el.color}
-                  fontFamily={`'${el.fontFamily || 'Inter'}', sans-serif`}
-                  wrap="word"
+                  color={el.color}
+                  fontFamily={el.fontFamily || 'Inter'}
                   draggable
                   rotation={el.rotation}
                   visible={editingTextId !== el.id}
@@ -1201,7 +1444,10 @@ export default function Board() {
                     selectElement(el.id, false);
                     setEditingTextId(el.id);
                     setEditingValue(el.text);
+                    setEditingFormatting(el.formatting ? [...el.formatting] : []);
                   }}
+                  onDragStart={dragSync.onStart}
+                  onDragMove={dragSync.onMove}
                   onDragEnd={(e) => {
                     if (dragSync.onEnd()) {
                       return;
@@ -1209,7 +1455,7 @@ export default function Board() {
                     updateElement({ ...el, x: e.target.x(), y: e.target.y() });
                   }}
                   onTransform={(e) => {
-                    const node = e.target as Konva.Text;
+                    const node = e.target as Konva.Shape;
                     const scaleX = node.scaleX();
                     const scaleY = node.scaleY();
                     node.setAttrs({
@@ -1220,7 +1466,7 @@ export default function Board() {
                     });
                   }}
                   onTransformEnd={(e) => {
-                    const node = e.target as Konva.Text;
+                    const node = e.target as Konva.Shape;
                     updateElement({
                       ...el,
                       x: node.x(),
@@ -1539,12 +1785,35 @@ export default function Board() {
 
           function toggleStyle(key: 'bold' | 'italic' | 'underline') {
             if (!el) return;
-            updateElement({ ...(el as any), [key]: !(el as any)[key] });
+            const ta = editTextareaRef.current;
+            const start = ta?.selectionStart ?? 0;
+            const end = ta?.selectionEnd ?? 0;
+            const next = toggleRangeFormatting(editingFormatting, editingValue, key, start, end);
+            setEditingFormatting(next);
+            // restore focus + selection: toolbar buttons preventDefault on mousedown, but
+            // clicking still blurs unless we refocus explicitly on the next tick.
+            requestAnimationFrame(() => {
+              ta?.focus();
+              ta?.setSelectionRange(start, end);
+            });
+          }
+
+          function activeAt(key: 'bold' | 'italic' | 'underline'): boolean {
+            const ta = editTextareaRef.current;
+            const start = ta?.selectionStart ?? 0;
+            const end = ta?.selectionEnd ?? 0;
+            if (start === end) {
+              return !!editingFormatting[Math.max(0, start - 1)]?.[key];
+            }
+            for (let i = start; i < end; i++) {
+              if (!editingFormatting[i]?.[key]) return false;
+            }
+            return true;
           }
 
           function commitAndClose() {
             if (!el) return;
-            updateElement({ ...(el as any), text: editingValue });
+            updateElement({ ...(el as any), text: editingValue, formatting: editingFormatting });
             setEditingTextId(null);
           }
 
@@ -1601,29 +1870,30 @@ export default function Board() {
                   </button>
                 </div>
                 <button
-                  className={`board-format-btn ${el.bold ? 'is-active' : ''}`}
+                  className={`board-format-btn ${activeAt('bold') ? 'is-active' : ''}`}
                   onClick={() => toggleStyle('bold')}
-                  title="Bold"
+                  title="Bold (selected text only)"
                 >
                   B
                 </button>
                 <button
-                  className={`board-format-btn board-format-btn--italic ${el.italic ? 'is-active' : ''}`}
+                  className={`board-format-btn board-format-btn--italic ${activeAt('italic') ? 'is-active' : ''}`}
                   onClick={() => toggleStyle('italic')}
-                  title="Italic"
+                  title="Italic (selected text only)"
                 >
                   I
                 </button>
                 <button
-                  className={`board-format-btn board-format-btn--underline ${el.underline ? 'is-active' : ''}`}
+                  className={`board-format-btn board-format-btn--underline ${activeAt('underline') ? 'is-active' : ''}`}
                   onClick={() => toggleStyle('underline')}
-                  title="Underline"
+                  title="Underline (selected text only)"
                 >
                   U
                 </button>
               </div>
               <textarea
                 autoFocus
+                ref={editTextareaRef}
                 className={isSticky ? 'board-editor board-editor--sticky' : 'board-editor'}
                 style={{
                   left: screenX,
@@ -1632,14 +1902,18 @@ export default function Board() {
                   height: el.height * scale,
                   fontSize: (el as any).fontSize * scale,
                   fontFamily: `'${el.fontFamily || 'Inter'}', sans-serif`,
-                  fontWeight: el.bold ? 700 : 400,
-                  fontStyle: el.italic ? 'italic' : 'normal',
-                  textDecoration: el.underline ? 'underline' : 'none',
                   background: isSticky ? (el as any).fill : 'transparent',
                   color: isSticky ? '#1a1a1a' : (el as any).color,
                 }}
                 value={editingValue}
-                onChange={(e) => setEditingValue(e.target.value)}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  setEditingFormatting((prev) => spliceFormatting(prev, editingValue, next));
+                  setEditingValue(next);
+                }}
+                onSelect={() => bumpSelectionTick((t) => t + 1)}
+                onKeyUp={() => bumpSelectionTick((t) => t + 1)}
+                onMouseUp={() => bumpSelectionTick((t) => t + 1)}
                 onBlur={commitAndClose}
                 onKeyDown={(e) => {
                   if (e.key === 'Escape') setEditingTextId(null);
@@ -2033,7 +2307,7 @@ function Frame({ el, onChange, onClick, onTap, id, dragSync }: any) {
 }
 
 function StickyNote({ el, isSelected, onChange, onDblClick, onClick, onTap, id, hidden, dragSync }: any) {
-  const textNodeRef = useRef<Konva.Text>(null);
+  const textNodeRef = useRef<Konva.Shape>(null);
   return (
     <>
       <Rect
@@ -2089,21 +2363,19 @@ function StickyNote({ el, isSelected, onChange, onDblClick, onClick, onTap, id, 
         }}
       />
       {!hidden && el.text && (
-        <Text
+        <RichText
           ref={textNodeRef}
           x={el.x + 12}
           y={el.y + 12}
           width={el.width - 24}
           height={el.height - 24}
           text={el.text}
+          formatting={el.formatting}
           fontSize={el.fontSize}
-          fontStyle={[el.bold ? 'bold' : '', el.italic ? 'italic' : ''].filter(Boolean).join(' ') || 'normal'}
-          textDecoration={el.underline ? 'underline' : ''}
-          fontFamily={`'${el.fontFamily || 'Inter'}', sans-serif`}
-          fill="#1a1a1a"
+          fontFamily={el.fontFamily || 'Inter'}
+          color="#1a1a1a"
           rotation={el.rotation}
           listening={false}
-          wrap="word"
         />
       )}
     </>

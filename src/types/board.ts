@@ -32,11 +32,22 @@ export interface BaseElement {
   groupId?: string | null;
 }
 
-export interface TextStyle {
+export interface CharFormat {
   bold?: boolean;
   italic?: boolean;
   underline?: boolean;
+}
+
+export interface TextStyle {
+  /** @deprecated whole-element fallback, superseded by per-character `formatting` */
+  bold?: boolean;
+  /** @deprecated whole-element fallback, superseded by per-character `formatting` */
+  italic?: boolean;
+  /** @deprecated whole-element fallback, superseded by per-character `formatting` */
+  underline?: boolean;
   fontFamily?: string;
+  /** Per-character bold/italic/underline, parallel array to `text` (index i describes text[i]). */
+  formatting?: CharFormat[];
 }
 
 export interface StickyElement extends BaseElement, TextStyle {
