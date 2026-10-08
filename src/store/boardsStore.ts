@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { nanoid } from 'nanoid';
 import type { Board, BoardElement, Folder } from '../types/board';
+import { IDB_PREFIX, putImage } from './imageStore';
 
 const STORAGE_KEY = 'canvasly.boards.v1';
 const FOLDERS_KEY = 'canvasly.folders.v1';
@@ -198,3 +199,37 @@ export const useBoardsStore = create<BoardsState>((set, get) => {
     },
   };
 });
+
+/**
+ * One-time migration for boards saved before images moved out of
+ * localStorage: pulls any inline `data:` image src still sitting in a
+ * board's JSON into IndexedDB, freeing up the shared localStorage quota
+ * immediately (rather than only stopping it from growing further).
+ * Safe to call on every app start — boards with nothing to migrate are
+ * left untouched (and not re-persisted).
+ */
+export async function migrateInlineImagesToIndexedDB(): Promise<void> {
+  const { boards, updateElements } = useBoardsStore.getState();
+  for (const board of Object.values(boards)) {
+    let changed = false;
+    const nextElements = await Promise.all(
+      board.elements.map(async (el) => {
+        if (el.type === 'image' && el.src.startsWith('data:')) {
+          try {
+            const imgId = nanoid(10);
+            await putImage(imgId, el.src);
+            changed = true;
+            return { ...el, src: IDB_PREFIX + imgId };
+          } catch (e) {
+            console.error('Image migration failed, leaving it inline', e);
+            return el;
+          }
+        }
+        return el;
+      })
+    );
+    if (changed) {
+      updateElements(board.id, nextElements);
+    }
+  }
+}

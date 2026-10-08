@@ -16,6 +16,7 @@ import {
 } from 'react-konva';
 import type Konva from 'konva';
 import { useBoardsStore } from '../store/boardsStore';
+import { IDB_PREFIX, getImage, putImage } from '../store/imageStore';
 import type { BoardElement, CharFormat, ElementType, GradientFill, ImageElement } from '../types/board';
 import { makeId } from '../utils/id';
 import './Board.css';
@@ -426,9 +427,30 @@ function downscaleImageSrc(img: HTMLImageElement, originalSrc: string): string {
 function useImageEl(src: string): HTMLImageElement | undefined {
   const [img, setImg] = useState<HTMLImageElement>();
   useEffect(() => {
-    const el = new window.Image();
-    el.src = src;
-    el.onload = () => setImg(el);
+    let cancelled = false;
+    setImg(undefined);
+
+    function load(resolvedSrc: string) {
+      const el = new window.Image();
+      el.onload = () => {
+        if (!cancelled) setImg(el);
+      };
+      el.src = resolvedSrc;
+    }
+
+    if (src.startsWith(IDB_PREFIX)) {
+      getImage(src.slice(IDB_PREFIX.length))
+        .then((dataUrl) => {
+          if (!cancelled && dataUrl) load(dataUrl);
+        })
+        .catch((e) => console.error('Failed to load image from IndexedDB', e));
+    } else {
+      load(src);
+    }
+
+    return () => {
+      cancelled = true;
+    };
   }, [src]);
   return img;
 }
@@ -1166,6 +1188,8 @@ export default function Board() {
       const maxDim = 320;
       const ratio = Math.min(maxDim / loadImg.width, maxDim / loadImg.height, 1);
       const idNew = makeId(8);
+      const imgId = makeId(10);
+      const downscaled = downscaleImageSrc(loadImg, src);
       const el: ImageElement = {
         id: idNew,
         type: 'image',
@@ -1176,10 +1200,16 @@ export default function Board() {
         rotation: 0,
         fill: 'transparent',
         draggable: true,
-        src: downscaleImageSrc(loadImg, src),
+        // Image bytes live in IndexedDB (much larger quota than localStorage),
+        // not inline in the board JSON — see src/store/imageStore.ts.
+        src: IDB_PREFIX + imgId,
       };
       applyElements((prev) => [...prev, el]);
       setSelectedIds([idNew]);
+      putImage(imgId, downscaled).catch((e) => {
+        console.error('Failed to store image in IndexedDB, falling back to inline storage', e);
+        updateElement({ ...el, src: downscaled });
+      });
     },
     [pos, scale, applyElements]
   );
