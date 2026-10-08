@@ -6,6 +6,40 @@
   font-family: 'Inter', system-ui, sans-serif;
 }
 
+.board-save-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 10px 16px;
+  background: #e0392c;
+  color: #fff;
+  font-size: 13.5px;
+  font-weight: 600;
+  text-align: center;
+}
+
+.board-save-banner button {
+  flex-shrink: 0;
+  border: none;
+  background: rgba(255, 255, 255, 0.2);
+  color: #fff;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.board-save-banner button:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
 .board-missing {
   display: flex;
   flex-direction: column;

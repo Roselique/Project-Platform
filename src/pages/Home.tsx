@@ -26,6 +26,8 @@ export default function Home() {
   const createFolder = useBoardsStore((s) => s.createFolder);
   const renameFolder = useBoardsStore((s) => s.renameFolder);
   const deleteFolder = useBoardsStore((s) => s.deleteFolder);
+  const saveError = useBoardsStore((s) => s.saveError);
+  const clearSaveError = useBoardsStore((s) => s.clearSaveError);
   const navigate = useNavigate();
 
   const [query, setQuery] = useState('');
@@ -80,6 +82,14 @@ export default function Home() {
 
   return (
     <div className="home">
+      {saveError && (
+        <div className="home__save-banner">
+          <span>⚠ {saveError}</span>
+          <button onClick={clearSaveError} title="Dismiss">
+            ✕
+          </button>
+        </div>
+      )}
       <div className="home__aurora" aria-hidden="true" />
 
       <header className="home__header">

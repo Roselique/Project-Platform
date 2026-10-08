@@ -392,6 +392,37 @@ const RichText = forwardRef<Konva.Shape, RichTextProps>(function RichText(props,
   );
 });
 
+const MAX_STORED_IMAGE_DIM = 1600;
+const SMALL_IMAGE_BYTES = 400_000;
+
+/**
+ * Re-encodes an image at a sane storage resolution before it goes into
+ * localStorage. Pasted/uploaded photos can be several MB at full camera
+ * resolution even though they're displayed at a few hundred px — left
+ * unchecked, a couple of them blow through the ~5-10MB localStorage quota
+ * and every subsequent save silently fails (see persist() in boardsStore).
+ */
+function downscaleImageSrc(img: HTMLImageElement, originalSrc: string): string {
+  const longest = Math.max(img.width, img.height);
+  if (longest <= MAX_STORED_IMAGE_DIM && originalSrc.length <= SMALL_IMAGE_BYTES) {
+    return originalSrc;
+  }
+  try {
+    const ratio = Math.min(1, MAX_STORED_IMAGE_DIM / longest);
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(img.width * ratio));
+    canvas.height = Math.max(1, Math.round(img.height * ratio));
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return originalSrc;
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    const isPng = originalSrc.startsWith('data:image/png');
+    return isPng ? canvas.toDataURL('image/png') : canvas.toDataURL('image/jpeg', 0.85);
+  } catch {
+    // tainted canvas (cross-origin image without usable CORS headers) — best effort, keep original
+    return originalSrc;
+  }
+}
+
 function useImageEl(src: string): HTMLImageElement | undefined {
   const [img, setImg] = useState<HTMLImageElement>();
   useEffect(() => {
@@ -455,6 +486,8 @@ export default function Board() {
   const updateCamera = useBoardsStore((s) => s.updateCamera);
   const updateThumbnail = useBoardsStore((s) => s.updateThumbnail);
   const renameBoard = useBoardsStore((s) => s.renameBoard);
+  const saveError = useBoardsStore((s) => s.saveError);
+  const clearSaveError = useBoardsStore((s) => s.clearSaveError);
 
   const [elements, setElements] = useState<BoardElement[]>(board?.elements ?? []);
   const [tool, setTool] = useState<Tool>('select');
@@ -508,25 +541,57 @@ export default function Board() {
     }
   }, [board?.id]);
 
+  const flushSave = useCallback(
+    (next: BoardElement[]) => {
+      if (!id) return;
+      updateElements(id, next);
+      const stage = stageRef.current;
+      if (stage) {
+        try {
+          const uri = stage.toDataURL({ pixelRatio: 0.3 });
+          updateThumbnail(id, uri);
+        } catch {
+          /* ignore canvas taint errors */
+        }
+      }
+    },
+    [id, updateElements, updateThumbnail]
+  );
+
   const scheduleSave = useCallback(
     (next: BoardElement[]) => {
       if (!id) return;
       if (saveTimer.current) window.clearTimeout(saveTimer.current);
       saveTimer.current = window.setTimeout(() => {
-        updateElements(id, next);
-        const stage = stageRef.current;
-        if (stage) {
-          try {
-            const uri = stage.toDataURL({ pixelRatio: 0.3 });
-            updateThumbnail(id, uri);
-          } catch {
-            /* ignore canvas taint errors */
-          }
-        }
+        saveTimer.current = null;
+        flushSave(next);
       }, 400);
     },
-    [id, updateElements, updateThumbnail]
+    [id, flushSave]
   );
+
+  // A debounced save pending when the tab closes/hides would otherwise be
+  // lost entirely — flush it immediately so a quick close never drops work.
+  useEffect(() => {
+    function flushIfPending() {
+      if (saveTimer.current) {
+        window.clearTimeout(saveTimer.current);
+        saveTimer.current = null;
+        flushSave(elementsRef.current);
+      }
+    }
+    function onVisibilityChange() {
+      if (document.visibilityState === 'hidden') flushIfPending();
+    }
+    window.addEventListener('beforeunload', flushIfPending);
+    window.addEventListener('pagehide', flushIfPending);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      window.removeEventListener('beforeunload', flushIfPending);
+      window.removeEventListener('pagehide', flushIfPending);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, [flushSave]);
 
   const applyElements = useCallback(
     (updater: (prev: BoardElement[]) => BoardElement[], recordHistory = true) => {
@@ -1111,7 +1176,7 @@ export default function Board() {
         rotation: 0,
         fill: 'transparent',
         draggable: true,
-        src,
+        src: downscaleImageSrc(loadImg, src),
       };
       applyElements((prev) => [...prev, el]);
       setSelectedIds([idNew]);
@@ -1234,7 +1299,15 @@ export default function Board() {
 
   return (
     <div className="board-page">
-      <header className="board-topbar">
+      {saveError && (
+        <div className="board-save-banner">
+          <span>⚠ {saveError}</span>
+          <button onClick={clearSaveError} title="Dismiss">
+            ✕
+          </button>
+        </div>
+      )}
+      <header className="board-topbar" style={saveError ? { top: 40 } : undefined}>
         <button className="board-icon-btn" onClick={() => navigate('/')} title="Back to home">
           ←
         </button>
