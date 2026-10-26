@@ -62,6 +62,7 @@ interface BoardsState {
   updateElements: (id: string, elements: BoardElement[]) => void;
   updateCamera: (id: string, camera: Board['camera']) => void;
   updateThumbnail: (id: string, thumbnail: string) => void;
+  clearInlineThumbnail: (id: string) => void;
   moveBoardToFolder: (id: string, folderId: string | null) => void;
   createFolder: (name: string) => string;
   renameFolder: (id: string, name: string) => void;
@@ -150,10 +151,22 @@ export const useBoardsStore = create<BoardsState>((set, get) => {
       persistAndFlag(boards);
     },
 
+    // Thumbnails are frequently-regenerated PNG snapshots of the whole
+    // canvas — storing them inline in the board JSON (as before) meant
+    // every single edit rewrote a sizeable blob into the same shared
+    // localStorage quota that images now avoid. They live in IndexedDB
+    // instead, keyed by the board id, and are never part of the
+    // localStorage-persisted board record.
     updateThumbnail: (id, thumbnail) => {
+      if (!get().boards[id]) return;
+      putImage(`thumb:${id}`, thumbnail).catch((e) => console.error('Failed to store thumbnail', e));
+    },
+
+    clearInlineThumbnail: (id) => {
       const boards = { ...get().boards };
-      if (!boards[id]) return;
-      boards[id] = { ...boards[id], thumbnail };
+      if (!boards[id] || boards[id].thumbnail === undefined) return;
+      const { thumbnail: _thumbnail, ...rest } = boards[id];
+      boards[id] = rest as Board;
       set({ boards });
       persistAndFlag(boards);
     },
@@ -209,7 +222,7 @@ export const useBoardsStore = create<BoardsState>((set, get) => {
  * left untouched (and not re-persisted).
  */
 export async function migrateInlineImagesToIndexedDB(): Promise<void> {
-  const { boards, updateElements } = useBoardsStore.getState();
+  const { boards, updateElements, clearInlineThumbnail } = useBoardsStore.getState();
   for (const board of Object.values(boards)) {
     let changed = false;
     const nextElements = await Promise.all(
@@ -230,6 +243,15 @@ export async function migrateInlineImagesToIndexedDB(): Promise<void> {
     );
     if (changed) {
       updateElements(board.id, nextElements);
+    }
+
+    if (board.thumbnail && board.thumbnail.startsWith('data:')) {
+      try {
+        await putImage(`thumb:${board.id}`, board.thumbnail);
+        clearInlineThumbnail(board.id);
+      } catch (e) {
+        console.error('Thumbnail migration failed, leaving it inline', e);
+      }
     }
   }
 }

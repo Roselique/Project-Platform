@@ -1,7 +1,25 @@
-import { useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useEffect, useMemo, useState } from 'react';
+import { useNavigate, type NavigateFunction } from 'react-router-dom';
 import { useBoardsStore } from '../store/boardsStore';
+import { getImage } from '../store/imageStore';
+import type { Board, Folder } from '../types/board';
 import './Home.css';
+
+function useBoardThumbnail(boardId: string): string | undefined {
+  const [thumb, setThumb] = useState<string>();
+  useEffect(() => {
+    let cancelled = false;
+    getImage(`thumb:${boardId}`)
+      .then((v) => {
+        if (!cancelled) setThumb(v);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [boardId]);
+  return thumb;
+}
 
 function timeAgo(ts: number): string {
   const diff = Date.now() - ts;
@@ -32,8 +50,6 @@ export default function Home() {
 
   const [query, setQuery] = useState('');
   const [activeFolder, setActiveFolder] = useState<string | null>('all');
-  const [renamingId, setRenamingId] = useState<string | null>(null);
-  const [renameValue, setRenameValue] = useState('');
   const [renamingFolderId, setRenamingFolderId] = useState<string | null>(null);
   const [folderRenameValue, setFolderRenameValue] = useState('');
 
@@ -60,11 +76,6 @@ export default function Home() {
   function handleCreate() {
     const id = createBoard(undefined, activeFolder && activeFolder !== 'all' && activeFolder !== 'unfiled' ? activeFolder : null);
     navigate(`/board/${id}`);
-  }
-
-  function commitRename(id: string) {
-    if (renameValue.trim()) renameBoard(id, renameValue);
-    setRenamingId(null);
   }
 
   function handleCreateFolder() {
@@ -219,87 +230,128 @@ export default function Home() {
               </button>
 
               {boardList.map((board) => (
-                <div className="board-card" key={board.id} onClick={() => navigate(`/board/${board.id}`)}>
-                  <div className="board-card__thumb">
-                    {board.thumbnail ? (
-                      <img src={board.thumbnail} alt="" />
-                    ) : (
-                      <div className="board-card__thumb-placeholder">
-                        <span>{board.name.slice(0, 1).toUpperCase()}</span>
-                      </div>
-                    )}
-                    {board.folderId && folders[board.folderId] && (
-                      <span
-                        className="board-card__folder-tag"
-                        style={{ background: folders[board.folderId].color }}
-                      >
-                        {folders[board.folderId].name}
-                      </span>
-                    )}
-                  </div>
-                  <div className="board-card__footer">
-                    {renamingId === board.id ? (
-                      <input
-                        className="board-card__rename-input"
-                        autoFocus
-                        value={renameValue}
-                        onClick={(e) => e.stopPropagation()}
-                        onChange={(e) => setRenameValue(e.target.value)}
-                        onBlur={() => commitRename(board.id)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') commitRename(board.id);
-                          if (e.key === 'Escape') setRenamingId(null);
-                        }}
-                      />
-                    ) : (
-                      <span className="board-card__name">{board.name}</span>
-                    )}
-                    <span className="board-card__time">Edited {timeAgo(board.updatedAt)}</span>
-                  </div>
-
-                  <div className="board-card__menu" onClick={(e) => e.stopPropagation()}>
-                    <details>
-                      <summary>⋯</summary>
-                      <div className="board-card__menu-items">
-                        <button
-                          onClick={() => {
-                            setRenamingId(board.id);
-                            setRenameValue(board.name);
-                          }}
-                        >
-                          Rename
-                        </button>
-                        <button onClick={() => navigate(`/board/${duplicateBoard(board.id)}`)}>Duplicate</button>
-                        {folderList.length > 0 && (
-                          <div className="board-card__menu-submenu">
-                            <span className="board-card__menu-submenu-label">Move to…</span>
-                            <button onClick={() => moveBoardToFolder(board.id, null)}>Unfiled</button>
-                            {folderList.map((f) => (
-                              <button key={f.id} onClick={() => moveBoardToFolder(board.id, f.id)}>
-                                <span className="home__sidebar-dot" style={{ background: f.color }} />
-                                {f.name}
-                              </button>
-                            ))}
-                          </div>
-                        )}
-                        <button
-                          className="board-card__menu-danger"
-                          onClick={() => {
-                            if (confirm(`Delete "${board.name}"? This can't be undone.`)) {
-                              deleteBoard(board.id);
-                            }
-                          }}
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    </details>
-                  </div>
-                </div>
+                <BoardCard
+                  key={board.id}
+                  board={board}
+                  folders={folders}
+                  folderList={folderList}
+                  navigate={navigate}
+                  renameBoard={renameBoard}
+                  duplicateBoard={duplicateBoard}
+                  deleteBoard={deleteBoard}
+                  moveBoardToFolder={moveBoardToFolder}
+                />
               ))}
             </div>
           )}
         </main>
+      </div>
+    </div>
+  );
+}
+
+function BoardCard({
+  board,
+  folders,
+  folderList,
+  navigate,
+  renameBoard,
+  duplicateBoard,
+  deleteBoard,
+  moveBoardToFolder,
+}: {
+  board: Board;
+  folders: Record<string, Folder>;
+  folderList: Folder[];
+  navigate: NavigateFunction;
+  renameBoard: (id: string, name: string) => void;
+  duplicateBoard: (id: string) => string;
+  deleteBoard: (id: string) => void;
+  moveBoardToFolder: (id: string, folderId: string | null) => void;
+}) {
+  const liveThumbnail = useBoardThumbnail(board.id);
+  const thumbnail = liveThumbnail ?? board.thumbnail;
+  const [isRenaming, setIsRenaming] = useState(false);
+  const [renameValue, setRenameValue] = useState(board.name);
+
+  function commitRename() {
+    if (renameValue.trim()) renameBoard(board.id, renameValue);
+    setIsRenaming(false);
+  }
+
+  return (
+    <div className="board-card" onClick={() => navigate(`/board/${board.id}`)}>
+      <div className="board-card__thumb">
+        {thumbnail ? (
+          <img src={thumbnail} alt="" />
+        ) : (
+          <div className="board-card__thumb-placeholder">
+            <span>{board.name.slice(0, 1).toUpperCase()}</span>
+          </div>
+        )}
+        {board.folderId && folders[board.folderId] && (
+          <span className="board-card__folder-tag" style={{ background: folders[board.folderId].color }}>
+            {folders[board.folderId].name}
+          </span>
+        )}
+      </div>
+      <div className="board-card__footer">
+        {isRenaming ? (
+          <input
+            className="board-card__rename-input"
+            autoFocus
+            value={renameValue}
+            onClick={(e) => e.stopPropagation()}
+            onChange={(e) => setRenameValue(e.target.value)}
+            onBlur={commitRename}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') commitRename();
+              if (e.key === 'Escape') setIsRenaming(false);
+            }}
+          />
+        ) : (
+          <span className="board-card__name">{board.name}</span>
+        )}
+        <span className="board-card__time">Edited {timeAgo(board.updatedAt)}</span>
+      </div>
+
+      <div className="board-card__menu" onClick={(e) => e.stopPropagation()}>
+        <details>
+          <summary>⋯</summary>
+          <div className="board-card__menu-items">
+            <button
+              onClick={() => {
+                setRenameValue(board.name);
+                setIsRenaming(true);
+              }}
+            >
+              Rename
+            </button>
+            <button onClick={() => navigate(`/board/${duplicateBoard(board.id)}`)}>Duplicate</button>
+            {folderList.length > 0 && (
+              <div className="board-card__menu-submenu">
+                <span className="board-card__menu-submenu-label">Move to…</span>
+                <button onClick={() => moveBoardToFolder(board.id, null)}>Unfiled</button>
+                {folderList.map((f) => (
+                  <button key={f.id} onClick={() => moveBoardToFolder(board.id, f.id)}>
+                    <span className="home__sidebar-dot" style={{ background: f.color }} />
+                    {f.name}
+                  </button>
+                ))}
+              </div>
+            )}
+            <button
+              className="board-card__menu-danger"
+              onClick={() => {
+                if (confirm(`Delete "${board.name}"? This can't be undone.`)) {
+                  deleteBoard(board.id);
+                }
+              }}
+            >
+              Delete
+            </button>
+          </div>
+        </details>
       </div>
     </div>
   );
